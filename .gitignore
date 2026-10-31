@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.log
+
+src-tauri/target/
+src-tauri/gen/schemas/
+
+.vscode/*
+!.vscode/extensions.json
+portable/
+
+# личные настройки Claude Code
+.claude/settings.local.json

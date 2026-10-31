@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- без фона: граф растянут почти на весь квадрат -->
+  <g transform="translate(512 512) scale(1.45) translate(-515 -512)">
+    <path d="M300 340 C 470 340, 470 512, 640 512" stroke="#5b8cff" stroke-width="44" fill="none" stroke-linecap="round"/>
+    <path d="M300 684 C 470 684, 470 512, 640 512" stroke="#3fcf8e" stroke-width="44" fill="none" stroke-linecap="round"/>
+    <circle cx="300" cy="340" r="88" fill="#3fcf8e"/>
+    <circle cx="300" cy="684" r="88" fill="#b07cff"/>
+    <circle cx="700" cy="512" r="118" fill="#f5b544"/>
+  </g>
+</svg>
