@@ -77,5 +77,5 @@ pause
 exit /b 1
 
 :pause_if_double_clicked
-echo %cmdcmdline% | find /i "%~nx0" >nul && pause
+echo %cmdcmdline% | "%SystemRoot%\System32\find.exe" /i "%~nx0" >nul && pause
 exit /b 0
