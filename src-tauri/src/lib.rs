@@ -35,6 +35,8 @@ pub fn run() {
     tauri::Builder::default()
         // first: a second instance must exit before it starts anything
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show_window(app)))
+        // file dialogs of graph export and import
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             log::init(&data_dir, &app.package_info().version.to_string());
@@ -96,6 +98,8 @@ pub fn run() {
             graphs::graph_set_prefs,
             graphs::graph_delete,
             graphs::graphs_reorder,
+            graphs::graph_export,
+            graphs::graph_import,
             cables::cables_list,
             cables::cable_create,
             cables::cable_update,

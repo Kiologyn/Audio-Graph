@@ -1,7 +1,9 @@
 //! Graph storage: every graph is a separate JSON file in the app's data folder.
 
-use crate::engine::Engine;
-use crate::storage::{check_id, clean_name, err, now_ms, write_atomic, CmdResult};
+use crate::cables::{Cable, CableStore};
+use crate::engine::{Engine, DYNAMIC_CABLES};
+use crate::storage::{check_id, clean_name, err, now_ms, unique_name, write_atomic, CmdResult};
+use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
@@ -184,6 +186,19 @@ pub struct GraphPrefs {
     pub show_delay: bool,
     pub delay_limit: f32,
     pub start_on_launch: bool,
+}
+
+/// What a graph export file says about itself
+const EXPORT_FORMAT: &str = "audio-graph";
+
+/// An exported graph: the graph and the listed cables it uses, so the cables can be recreated
+/// on another computer (on Linux the graph creates its cables itself, the list is empty)
+#[derive(Serialize, Deserialize)]
+struct ExportFile {
+    format: String,
+    graph: Graph,
+    #[serde(default)]
+    cables: Vec<Cable>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -386,6 +401,77 @@ pub fn graph_set_prefs(store: State<GraphStore>, engine: State<Engine>, id: Stri
     Ok(GraphMeta::from(&graph))
 }
 
+/// Writes a graph into a file of the user's choice
+#[tauri::command]
+pub fn graph_export(store: State<GraphStore>, cables: State<CableStore>, id: String, path: PathBuf) -> CmdResult<()> {
+    let graph = store.load(&id)?;
+    let used: Vec<&str> = graph.nodes.iter().filter_map(|n| n.cable.as_deref()).collect();
+    let listed = cables.all()?.into_iter().filter(|c| used.contains(&c.id.as_str())).collect();
+    let file = ExportFile {
+        format: EXPORT_FORMAT.into(),
+        graph,
+        cables: listed,
+    };
+    fs::write(path, serde_json::to_vec_pretty(&file).map_err(err)?).map_err(err)
+}
+
+/// Adds a graph from an export file (or a graph file from another computer's data folder) and opens it.
+/// It gets new ids: the same file may be imported twice, and node ids are unique across graphs.
+/// Its cables join the cable list
+#[tauri::command]
+pub fn graph_import(
+    store: State<GraphStore>,
+    cables: State<CableStore>,
+    engine: State<Engine>,
+    path: PathBuf,
+) -> CmdResult<Graph> {
+    let text = fs::read_to_string(&path).map_err(err)?;
+    let (mut graph, listed) = match serde_json::from_str::<ExportFile>(&text) {
+        Ok(f) if f.format == EXPORT_FORMAT => (f.graph, f.cables),
+        _ => (serde_json::from_str::<Graph>(&text).map_err(|_| tr!("error_import_not_graph"))?, Vec::new()),
+    };
+    if !DYNAMIC_CABLES {
+        let ids = cables.adopt(&listed, &engine)?;
+        for node in &mut graph.nodes {
+            if let Some(id) = node.cable.as_ref().and_then(|c| ids.get(c)) {
+                node.cable = Some(id.clone());
+            }
+        }
+    }
+    renew_ids(&mut graph);
+
+    let _guard = store.lock.lock().map_err(err)?;
+    let names: Vec<String> = store.list()?.into_iter().map(|g| g.name).collect();
+    let now = now_ms();
+    graph.version = FORMAT_VERSION;
+    graph.name = unique_name(&clean_name(&graph.name)?, names.iter().map(String::as_str));
+    graph.created_at = now;
+    graph.updated_at = now;
+    // an imported graph starts with the app only once it is marked on this computer
+    graph.start_on_launch = false;
+    store.write(&graph)?;
+    store.set_last_opened(Some(&graph.id))?;
+    engine.opened(&graph);
+    Ok(graph)
+}
+
+/// New ids for a graph, its nodes and edges; edges follow their nodes
+fn renew_ids(graph: &mut Graph) {
+    let new_id = || uuid::Uuid::new_v4().to_string();
+    graph.id = new_id();
+    let ids: HashMap<String, String> = graph.nodes.iter().map(|n| (n.id.clone(), new_id())).collect();
+    for node in &mut graph.nodes {
+        node.id = ids[&node.id].clone();
+    }
+    // edges to nodes that aren't there are dropped
+    graph.edges.retain(|e| ids.contains_key(&e.source) && ids.contains_key(&e.target));
+    for edge in &mut graph.edges {
+        edge.source = ids[&edge.source].clone();
+        edge.target = ids[&edge.target].clone();
+        edge.id = format!("{}->{}", edge.source, edge.target);
+    }
+}
+
 #[tauri::command]
 pub fn graph_delete(store: State<GraphStore>, engine: State<Engine>, id: String) -> CmdResult<()> {
     let _guard = store.lock.lock().map_err(err)?;
@@ -396,4 +482,32 @@ pub fn graph_delete(store: State<GraphStore>, engine: State<Engine>, id: String)
         store.set_last_opened(None)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn imported_graph_gets_new_ids() {
+        let text = r#"{"id":"g","name":"Music","createdAt":1,"updatedAt":1,
+            "nodes":[{"id":"a","kind":"system","label":"System","position":{"x":0,"y":0}},
+                     {"id":"b","kind":"output","label":"Speakers","position":{"x":1,"y":0}}],
+            "edges":[{"id":"a->b","source":"a","target":"b"},{"id":"a->gone","source":"a","target":"gone"}]}"#;
+        let mut graph: Graph = serde_json::from_str(text).unwrap();
+        renew_ids(&mut graph);
+        assert_ne!(graph.id, "g");
+        let (a, b) = (&graph.nodes[0].id, &graph.nodes[1].id);
+        assert!(a != "a" && b != "b");
+        // the edge follows its nodes, the edge to a missing node is gone
+        assert_eq!(graph.edges.len(), 1);
+        assert_eq!((&graph.edges[0].source, &graph.edges[0].target), (a, b));
+        assert_eq!(graph.edges[0].id, format!("{a}->{b}"));
+    }
+
+    #[test]
+    fn unique_names() {
+        assert_eq!(unique_name("Music", ["Games"]), "Music");
+        assert_eq!(unique_name("Music", ["Music", "Music 2"]), "Music 3");
+    }
 }

@@ -35,6 +35,15 @@ pub fn check_id(id: &str) -> CmdResult<()> {
     }
 }
 
+/// "Name", or if taken "Name 2", "Name 3"... (as uniqueName in src/graph/names.ts)
+pub fn unique_name<'a>(base: &str, taken: impl IntoIterator<Item = &'a str>) -> String {
+    let taken: std::collections::HashSet<&str> = taken.into_iter().collect();
+    if !taken.contains(base) {
+        return base.to_string();
+    }
+    (2..).map(|i| format!("{base} {i}")).find(|n| !taken.contains(n.as_str())).unwrap_or_default()
+}
+
 pub fn clean_name(name: &str) -> CmdResult<String> {
     let name = name.trim();
     if name.is_empty() {

@@ -11,12 +11,16 @@ import { useGraph } from "./store";
 
 type RowMode = "view" | "edit" | "confirm";
 
+/** The outcome of an export or import, shown under the list */
+type Transfer = { ok: boolean; text: string };
+
 function GraphRow({
   graph,
   current,
   mode,
   setMode,
   onOpen,
+  onExport,
   grip,
 }: {
   graph: GraphMeta;
@@ -24,6 +28,7 @@ function GraphRow({
   mode: RowMode;
   setMode: (mode: RowMode) => void;
   onOpen: () => void;
+  onExport: (result: Transfer) => void;
   /** The handle to drag the row by */
   grip: ReactNode;
 }) {
@@ -90,7 +95,7 @@ function GraphRow({
       <button className="ag-panel__name" onClick={onOpen} onDoubleClick={() => setMode("edit")} title={graph.name}>
         {graph.name}
       </button>
-      <GraphOptions graph={graph} />
+      <GraphOptions graph={graph} onExport={onExport} />
       <RunToggle id={graph.id} />
       <button className="ag-panel__action" title={t("rename")} onClick={() => setMode("edit")}>
         <Icon name="pencil" />
@@ -164,9 +169,10 @@ function SecondsField({
   );
 }
 
-/** The arrow in a graph's row: a menu with its volume and delay sliders and the delay range */
-function GraphOptions({ graph }: { graph: GraphMeta }) {
+/** The arrow in a graph's row: a menu with its sliders, the delay range, starting with the app and export */
+function GraphOptions({ graph, onExport }: { graph: GraphMeta; onExport: (result: Transfer) => void }) {
   const setPrefs = useLibrary((s) => s.setPrefs);
+  const exportGraph = useLibrary((s) => s.exportGraph);
   const anchor = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const t = useT();
@@ -228,6 +234,19 @@ function GraphOptions({ graph }: { graph: GraphMeta }) {
                 <small>{t(autostart ? "graph_start_on_launch_hint" : "graph_start_on_launch_off")}</small>
               </span>
             </label>
+            <button
+              className="ag-graph-options__export"
+              onClick={() => {
+                setOpen(false);
+                exportGraph(graph.id).then(
+                  (done) => done && onExport({ ok: true, text: t("graph_exported", { name: graph.name }) }),
+                  (e) => onExport({ ok: false, text: t("graph_export_failed", { error: String(e) }) }),
+                );
+              }}
+            >
+              <Icon name="export" />
+              {t("graph_export")}
+            </button>
           </div>
         </Popover>
       )}
@@ -256,6 +275,8 @@ export function GraphMenu() {
   const open = useLibrary((s) => s.open);
   const create = useLibrary((s) => s.create);
   const reorder = useLibrary((s) => s.reorder);
+  const importGraph = useLibrary((s) => s.importGraph);
+  const [transfer, setTransfer] = useState<Transfer | null>(null);
   const current = useGraph((s) => s.meta);
   const runningCount = useEngine((s) => s.status.running.length);
   const [isOpen, setOpen] = useState(false);
@@ -271,6 +292,7 @@ export function GraphMenu() {
   const close = () => {
     setOpen(false);
     setActive(null);
+    setTransfer(null);
   };
 
   useEffect(() => {
@@ -329,6 +351,7 @@ export function GraphMenu() {
                   mode={active?.id === g.id ? active.mode : "view"}
                   setMode={(mode) => setActive(mode === "view" ? null : { id: g.id, mode })}
                   onOpen={() => open(g.id)}
+                  onExport={setTransfer}
                   grip={
                     <span className="ag-panel__grip" title={t("drag_to_reorder")} {...sortable.handle(g.id)}>
                       <Icon name="grip" />
@@ -343,7 +366,20 @@ export function GraphMenu() {
               <Icon name="plus" />
               {t("new_graph")}
             </button>
+            <button
+              className="ag-panel__add ag-graphs__import"
+              title={t("graph_import")}
+              onClick={() =>
+                importGraph().then(
+                  (done) => done && setTransfer({ ok: true, text: t("graph_imported") }),
+                  (e) => setTransfer({ ok: false, text: t("graph_import_failed", { error: String(e) }) }),
+                )
+              }
+            >
+              <Icon name="import" />
+            </button>
           </div>
+          {transfer && <div className={`ag-panel__note${transfer.ok ? "" : " is-error"}`}>{transfer.text}</div>}
         </div>
       )}
     </div>

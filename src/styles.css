@@ -173,6 +173,26 @@ button {
   padding: 10px 12px;
 }
 
+.ag-graph-options__export {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  margin: 0 -8px -4px;
+  border: 0;
+  border-top: 1px solid var(--ag-border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ag-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ag-graph-options__export:hover {
+  background: var(--ag-surface-2);
+}
+
 .ag-graph-options__row {
   display: flex;
   align-items: flex-start;
@@ -693,6 +713,24 @@ button {
 .ag-panel__add:disabled {
   opacity: 0.6;
   cursor: progress;
+}
+
+/* import next to "New graph": an icon only */
+.ag-graphs__import {
+  flex: 0 0 auto;
+  justify-content: center;
+}
+
+/* the outcome of an export or import under the graph list */
+.ag-panel__note {
+  padding: 0 8px 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--ag-text-dim);
+}
+
+.ag-panel__note.is-error {
+  color: var(--ag-danger);
 }
 
 .ag-panel__footer.is-column {

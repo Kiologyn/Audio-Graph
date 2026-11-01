@@ -21,6 +21,8 @@ uuid = { version = "1.29.0", features = ["v4"] }
 # a second launch shows the first one's window: two engines would interfere, and without a tray
 # (GNOME without an extension) a hidden window couldn't be brought back otherwise
 tauri-plugin-single-instance = "2"
+# file dialogs of graph export and import
+tauri-plugin-dialog = "2"
 
 [target."cfg(target_os = \"linux\")".dependencies]
 # the Linux audio server: PulseAudio or PipeWire (through pipewire-pulse)

@@ -14,4 +14,6 @@ export const graphsApi = {
     invoke<GraphMeta>("graph_set_prefs", { id, prefs: { showVolume, showDelay, delayLimit, startOnLaunch } }),
   remove: (id: string) => invoke<void>("graph_delete", { id }),
   reorder: (ids: string[]) => invoke<void>("graphs_reorder", { ids }),
+  exportTo: (id: string, path: string) => invoke<void>("graph_export", { id, path }),
+  importFrom: (path: string) => invoke<GraphDoc>("graph_import", { path }),
 };
