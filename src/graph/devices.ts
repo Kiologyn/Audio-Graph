@@ -90,6 +90,22 @@ export const useDevices = create<DevicesState>()((set, get) => ({
 }));
 
 /**
+ * A chosen device in the list: the one with its id, or if the system no longer has that id
+ * (plugged into another USB port, another Bluetooth profile on Linux) the only device on
+ * of that direction with the same name. Matches devices::find in Rust
+ */
+export function findDevice(
+  ref: { id: string; name: string },
+  flow: AudioDevice["flow"],
+  devices: AudioDevice[],
+): AudioDevice | undefined {
+  const exact = devices.find((d) => d.flow === flow && d.id === ref.id);
+  if (exact) return exact;
+  const same = devices.filter((d) => d.flow === flow && d.state === "active" && !d.isVirtual && d.name === ref.name);
+  return same.length === 1 ? same[0] : undefined;
+}
+
+/**
  * The label of the chosen device from the list buffer.
  * missing: the device is chosen but the system doesn't have it (unplugged or removed);
  * disabled: present but turned off.
@@ -102,7 +118,7 @@ export function describeDevice(
 ): { text: string | null; missing: boolean; disabled: boolean } {
   if (!ref) return { text: null, missing: false, disabled: false };
   if (ref.type === "default") return { text: t("device_default"), missing: false, disabled: false };
-  const device = devices.find((d) => d.flow === flow && d.id === ref.id);
+  const device = findDevice(ref, flow, devices);
   // while the device exists in the system, show its current name
   return { text: device?.name ?? ref.name, missing: loaded && !device, disabled: device?.state === "disabled" };
 }

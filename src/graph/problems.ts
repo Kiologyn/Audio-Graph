@@ -1,7 +1,7 @@
 import { t } from "../i18n";
 import { dynamicCables, virtualDeviceIds } from "../platform";
 import { cableDeviceIds, cableMismatch, type Cable } from "./cables";
-import type { AudioDevice } from "./devices";
+import { findDevice, type AudioDevice } from "./devices";
 import type { AppStatus, EngineStatus } from "./engine";
 import type { AudioNode, AudioNodeData, DeviceRef } from "./types";
 
@@ -25,8 +25,13 @@ const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /** A node's system devices: engine stream errors find their nodes by them */
 function nodeDevices(id: string, data: AudioNodeData, cables: Cable[], devices: AudioDevice[]): string[] {
+  // as the engine resolves them: a device under a new id is found by name
   const resolve = (ref: DeviceRef | null, flow: AudioDevice["flow"]) =>
-    ref?.type === "device" ? ref.id : ref?.type === "default" ? devices.find((d) => d.flow === flow && d.isDefault)?.id : undefined;
+    ref?.type === "device"
+      ? (findDevice(ref, flow, devices)?.id ?? ref.id)
+      : ref?.type === "default"
+        ? devices.find((d) => d.flow === flow && d.isDefault)?.id
+        : undefined;
   const ids =
     data.kind === "input"
       ? [resolve(data.source, "capture")]

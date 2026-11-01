@@ -1,5 +1,6 @@
 //! The engine on Windows: WASAPI streams and app devices.
 
+pub(crate) mod probe;
 mod router;
 mod streams;
 
@@ -30,6 +31,11 @@ impl Backend {
         let mut apps = self.router.apply(&plan.routes);
         apps.extend(self.router.apply_system(plan.system.as_ref()));
         (streams, apps)
+    }
+
+    /// Devices changed: failed streams may try again without waiting for their retry pause
+    pub fn retry_now(&mut self) {
+        self.streams.retry_now();
     }
 
     pub fn shutdown(&mut self) {

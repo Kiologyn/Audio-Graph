@@ -17,6 +17,8 @@ export type Settings = {
   hideMinimap: boolean;
   /** The volume checkbox of a new graph: whether its nodes show volume sliders */
   newGraphVolume: boolean;
+  /** Start with the system (only an installed app can) */
+  autostart: boolean;
 };
 
 type SettingsState = Settings & {
@@ -32,6 +34,7 @@ const DEFAULTS: Settings = {
   disableIdleCables: false,
   hideMinimap: false,
   newGraphVolume: true,
+  autostart: false,
 };
 
 // writes to disk go in order: the last request carries the latest settings
@@ -54,11 +57,15 @@ export const useSettings = create<SettingsState>()((set, get) => ({
 
   set: (patch) => {
     set(patch);
-    const { theme, language, disableIdleCables, hideMinimap, newGraphVolume } = get();
-    const settings: Settings = { theme, language, disableIdleCables, hideMinimap, newGraphVolume };
+    const { theme, language, disableIdleCables, hideMinimap, newGraphVolume, autostart } = get();
+    const settings: Settings = { theme, language, disableIdleCables, hideMinimap, newGraphVolume, autostart };
     queue = queue.then(
       () => invoke("settings_set", { settings }).then(() => set({ error: null })),
-    ).catch((e) => set({ error: String(e) }));
+    ).catch(async (e) => {
+      // what really is set comes back (the autostart entry may fail to be written)
+      await get().load();
+      set({ error: String(e) });
+    });
   },
 }));
 

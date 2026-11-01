@@ -42,6 +42,8 @@ export type AudioNodeData = {
   volume: number;
   /** An output's delay in seconds relative to the other outputs: plus plays later, minus earlier */
   delay: number;
+  /** Left-right balance from -1 (left only) to 1 (right only) */
+  balance: number;
 };
 
 export type AudioNode = Node<AudioNodeData, "audio">;
@@ -75,6 +77,8 @@ type KindMeta = {
   maxVolume?: number;
   /** The node has a delay slider (when the graph's delay sliders are on) */
   delay?: boolean;
+  /** The node has a balance slider (when the graph's balance sliders are on): the engine's nodes, not apps */
+  balance?: boolean;
 };
 
 export const NODE_KINDS: Record<AudioNodeKind, KindMeta> = {
@@ -85,6 +89,7 @@ export const NODE_KINDS: Record<AudioNodeKind, KindMeta> = {
     hasOutput: true,
     source: { placeholder: "placeholder_no_device", allowDefault: true },
     maxVolume: 2,
+    balance: true,
   },
   output: {
     title: "node_output",
@@ -93,6 +98,7 @@ export const NODE_KINDS: Record<AudioNodeKind, KindMeta> = {
     hasOutput: false,
     sink: { placeholder: "placeholder_no_device", allowDefault: true },
     maxVolume: 2,
+    balance: true,
     delay: true,
   },
   app: {
@@ -111,6 +117,7 @@ export const NODE_KINDS: Record<AudioNodeKind, KindMeta> = {
     // the device pair is set in the cable list, the node only refers to the cable
     pickCable: true,
     maxVolume: 2,
+    balance: true,
   },
   system: {
     title: "node_system",

@@ -173,6 +173,202 @@ button {
   padding: 10px 12px;
 }
 
+.ag-graph-options__export {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  margin: 0 -8px -4px;
+  border: 0;
+  border-top: 1px solid var(--ag-border);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ag-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* the second action under the first one: no line between them */
+.ag-graph-options__export.is-next {
+  margin-top: -12px;
+  border-top: 0;
+}
+
+.ag-graph-options__export:hover {
+  background: var(--ag-surface-2);
+}
+
+/* ---------- dialogs ---------- */
+
+.ag-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgb(0 0 0 / 0.45);
+}
+
+.ag-modal__box {
+  display: grid;
+  gap: 12px;
+  width: 460px;
+  max-width: 100%;
+  max-height: 100%;
+  overflow: auto;
+  padding: 16px 18px;
+  background: var(--ag-surface);
+  border: 1px solid var(--ag-border);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgb(0 0 0 / 0.35);
+}
+
+.ag-modal__title {
+  margin: 0;
+  font-size: 15px;
+}
+
+.ag-modal__text,
+.ag-modal__note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ag-text-dim);
+}
+
+.ag-modal__note.is-error {
+  color: var(--ag-danger);
+}
+
+.ag-modal__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.ag-button {
+  padding: 6px 12px;
+  border: 1px solid var(--ag-border);
+  border-radius: 6px;
+  background: var(--ag-surface);
+  color: var(--ag-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.ag-button:hover:not(:disabled) {
+  background: var(--ag-surface-2);
+}
+
+.ag-button.is-primary {
+  border-color: var(--ag-focus);
+  background: var(--ag-focus);
+  color: #fff;
+}
+
+.ag-button.is-primary:hover:not(:disabled) {
+  background: var(--ag-focus);
+  filter: brightness(1.1);
+}
+
+.ag-button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.ag-calibration__mic {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+}
+
+.ag-calibration__mic > :last-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.ag-calibration__outputs {
+  display: grid;
+  gap: 2px;
+  padding: 4px 0;
+  border-top: 1px solid var(--ag-border);
+  border-bottom: 1px solid var(--ag-border);
+}
+
+.ag-calibration__empty {
+  padding: 6px 0;
+  font-size: 12px;
+  color: var(--ag-text-dim);
+}
+
+.ag-calibration__output {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  cursor: pointer;
+}
+
+.ag-calibration__output input {
+  margin: 0;
+  accent-color: var(--ag-focus);
+}
+
+.ag-calibration__output.is-disabled {
+  cursor: default;
+}
+
+.ag-calibration__output.is-disabled > :not(.ag-calibration__status) {
+  opacity: 0.55;
+}
+
+.ag-calibration__name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+}
+
+.ag-calibration__name small {
+  display: block;
+  overflow: hidden;
+  font-size: 11px;
+  color: var(--ag-text-dim);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ag-calibration__status {
+  display: grid;
+  justify-items: end;
+  max-width: 50%;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--ag-text-dim);
+}
+
+.ag-calibration__status b {
+  font-weight: 600;
+  color: var(--ag-focus);
+}
+
+.ag-calibration__status.is-active {
+  color: var(--ag-focus);
+}
+
+.ag-calibration__status.is-error {
+  color: var(--ag-danger);
+}
+
+.ag-calibration__status.is-unsteady {
+  color: var(--ag-warning);
+}
+
 .ag-graph-options__row {
   display: flex;
   align-items: flex-start;
@@ -232,8 +428,19 @@ button {
   border-color: var(--ag-focus);
 }
 
-.ag-graph-options__seconds.is-disabled {
+.ag-graph-options__seconds.is-disabled,
+.ag-graph-options__check.is-disabled > input,
+.ag-graph-options__check.is-disabled > span,
+.ag-settings__check.is-disabled > input,
+.ag-settings__check.is-disabled > span {
   opacity: 0.5;
+}
+
+.ag-graph-options__check.is-disabled,
+.ag-settings__check.is-disabled,
+.ag-graph-options__check.is-disabled input,
+.ag-settings__check.is-disabled input {
+  cursor: default;
 }
 
 .ag-header-btn--icon {
@@ -339,6 +546,10 @@ button {
 }
 
 .ag-run__dot {
+  flex: none;
+  /* room for the halo: the state clips what overflows it */
+  margin: 3px;
+  margin-right: 0;
   width: 7px;
   height: 7px;
   border-radius: 50%;
@@ -682,6 +893,24 @@ button {
 .ag-panel__add:disabled {
   opacity: 0.6;
   cursor: progress;
+}
+
+/* import next to "New graph": an icon only */
+.ag-graphs__import {
+  flex: 0 0 auto;
+  justify-content: center;
+}
+
+/* the outcome of an export or import under the graph list */
+.ag-panel__note {
+  padding: 0 8px 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--ag-text-dim);
+}
+
+.ag-panel__note.is-error {
+  color: var(--ag-danger);
 }
 
 .ag-panel__footer.is-column {
@@ -1040,6 +1269,23 @@ button {
   user-select: none;
 }
 
+/* the balance row: L and R around the slider, the side and percentage on the right */
+.ag-balance {
+  gap: 6px;
+  margin-top: 6px;
+}
+
+/* the slider takes what is left: its own width would make the node wider than the volume row */
+.ag-balance input {
+  width: 0;
+}
+
+.ag-balance__edge {
+  font-size: 10.5px;
+  color: var(--ag-text-dim);
+  user-select: none;
+}
+
 /* gain above 100% is done by the engine only, and it shows */
 .ag-volume__value.is-boost {
   color: var(--accent);
@@ -1076,7 +1322,8 @@ button {
   user-select: none;
 }
 
-.ag-delay input {
+.ag-delay input,
+.ag-balance input {
   background: linear-gradient(
     to right,
     var(--ag-surface-2) var(--from),

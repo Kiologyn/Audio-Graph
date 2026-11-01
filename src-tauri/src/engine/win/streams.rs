@@ -2,7 +2,7 @@
 //! gets its own stream. Recording hands packets to all links, output mixes its links.
 
 use super::super::link::{link, LinkReader, CHANNELS, RATE};
-use super::super::plan::{Stream, LOOPBACK_PREFIX};
+use super::super::plan::{Gain, Stream, LOOPBACK_PREFIX};
 use super::super::ring::Producer;
 use super::super::{DeviceError, StreamStatus};
 use crate::com::{wide, ComGuard};
@@ -48,7 +48,7 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn describe(e: windows::core::Error) -> String {
+pub(super) fn describe(e: windows::core::Error) -> String {
     match e.code() {
         AUDCLNT_E_DEVICE_INVALIDATED => tr!("error_device_disconnected"),
         AUDCLNT_E_DEVICE_IN_USE => tr!("error_device_exclusive"),
@@ -106,6 +106,11 @@ impl<T: Send + 'static> Worker<T> {
             .ok();
     }
 
+    /// The next supervise may start a failed stream at once
+    fn retry_now(&mut self) {
+        self.started = None;
+    }
+
     fn error(&self) -> Option<String> {
         if self.working.load(Ordering::Relaxed) {
             None
@@ -140,7 +145,7 @@ impl Streams {
     /// Brings streams in line with the plan on the fly: new links are added, extra ones removed
     pub fn apply(&mut self, plan: &[Stream]) -> Vec<StreamStatus> {
         // link → volume and delay
-        let wanted: BTreeMap<(&str, &str), (f32, f32)> = plan
+        let wanted: BTreeMap<(&str, &str), (Gain, f32)> = plan
             .iter()
             .flat_map(|s| s.sources.iter().map(|src| ((src.device.as_str(), s.sink.as_str()), (src.gain, src.delay))))
             .collect();
@@ -200,6 +205,11 @@ impl Streams {
             .collect()
     }
 
+    pub fn retry_now(&mut self) {
+        self.captures.values_mut().for_each(Worker::retry_now);
+        self.renders.values_mut().for_each(Worker::retry_now);
+    }
+
     pub fn shutdown(&mut self) {
         for (_, w) in self.captures.drain() {
             w.shutdown();
@@ -211,7 +221,7 @@ impl Streams {
 }
 
 /// The event WASAPI wakes the thread with when a packet is due
-struct Event(HANDLE);
+pub(super) struct Event(pub(super) HANDLE);
 
 impl Drop for Event {
     fn drop(&mut self) {
@@ -239,7 +249,7 @@ impl Drop for ProAudio {
 
 /// Opens the device and sets up a stream in the engine format.
 /// "loopback:<output device>" opens the output device to record what is played into it
-fn open(device: &str) -> Result<(IAudioClient, Event), String> {
+pub(super) fn open(device: &str) -> Result<(IAudioClient, Event), String> {
     let (device, flags) = match device.strip_prefix(LOOPBACK_PREFIX) {
         Some(render) => (render, FLAGS | AUDCLNT_STREAMFLAGS_LOOPBACK),
         None => (device, FLAGS),
@@ -370,7 +380,16 @@ mod tests {
     #[test]
     #[ignore]
     fn vac_loopback() {
-        tone_through(&vac(Flow::Render), &vac(Flow::Capture), 0.0);
+        tone_through(&vac(Flow::Render), &vac(Flow::Capture), 0.0, [1.0; 2]);
+    }
+
+    /// The same with the balance to the left: the right channel comes a quarter as loud
+    /// cargo test vac_balanced -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn vac_balanced() {
+        let (_, [left, right]) = tone_through(&vac(Flow::Render), &vac(Flow::Capture), 0.0, [1.0, 0.25]);
+        assert!((right / left - 0.25).abs() < 0.02, "{left} {right}");
     }
 
     /// The same with an output delay of 300 ms: the tone comes that much later
@@ -378,8 +397,8 @@ mod tests {
     #[test]
     #[ignore]
     fn vac_delayed() {
-        let plain = tone_through(&vac(Flow::Render), &vac(Flow::Capture), 0.0);
-        let delayed = tone_through(&vac(Flow::Render), &vac(Flow::Capture), 0.3);
+        let (plain, _) = tone_through(&vac(Flow::Render), &vac(Flow::Capture), 0.0, [1.0; 2]);
+        let (delayed, _) = tone_through(&vac(Flow::Render), &vac(Flow::Capture), 0.3, [1.0; 2]);
         let extra = delayed.as_secs_f32() - plain.as_secs_f32();
         println!("the delay added {:.0} ms", extra * 1000.0);
         assert!((extra - 0.3).abs() < 0.03, "{extra}");
@@ -391,11 +410,63 @@ mod tests {
     #[ignore]
     fn vac_input_loopback() {
         let render_id = vac(Flow::Render);
-        tone_through(&render_id, &format!("{LOOPBACK_PREFIX}{render_id}"), 0.0);
+        tone_through(&render_id, &format!("{LOOPBACK_PREFIX}{render_id}"), 0.0, [1.0; 2]);
     }
 
-    /// Plays a tone through a link with the delay; returns when it was heard
-    fn tone_through(render_id: &str, capture_id: &str, delay: f32) -> Duration {
+    /// Turns the VAC Line 1 recording device off and on under a running link (Line 1 → Line 2):
+    /// the stream must come back by itself. Changes the system state for a moment:
+    /// cargo test device_comes_back -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn device_comes_back() {
+        let _com = ComGuard::init();
+        let line = |n: &str, flow: Flow| {
+            list()
+                .unwrap()
+                .into_iter()
+                .find(|d| d.name.starts_with(&format!("Line {n} (Virtual Audio Cable")) && d.flow == flow && d.state == DeviceState::Active)
+                .expect("VAC lines 1 and 2 must be on")
+                .id
+        };
+        let (source, sink) = (line("1", Flow::Capture), line("2", Flow::Render));
+        let plan = [Stream {
+            sink: sink.clone(),
+            sources: vec![super::super::super::plan::Source { device: source.clone(), gain: [1.0; 2], delay: 0.0 }],
+            output: true,
+        }];
+        let mut streams = Streams::default();
+        let errors = |streams: &mut Streams| streams.apply(&plan)[0].errors.clone();
+        let wait = |streams: &mut Streams, broken: bool| {
+            let started = Instant::now();
+            while started.elapsed() < Duration::from_secs(10) {
+                if errors(streams).is_empty() != broken {
+                    return started.elapsed();
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            panic!("no change in 10 s");
+        };
+        wait(&mut streams, false);
+        crate::devices::set_enabled(&[source.clone()], false).unwrap();
+        let broke = wait(&mut streams, true);
+        println!("off: an error after {broke:?}: {:?}", errors(&mut streams));
+        crate::devices::set_enabled(&[source.clone()], true).unwrap();
+        let back = wait(&mut streams, false);
+        println!("on: working again after {back:?} by retrying");
+
+        // the same, but told that devices changed, as the device watch does
+        crate::devices::set_enabled(&[source.clone()], false).unwrap();
+        wait(&mut streams, true);
+        crate::devices::set_enabled(&[source.clone()], true).unwrap();
+        streams.retry_now();
+        let back = wait(&mut streams, false);
+        println!("on: working again after {back:?} when told");
+        assert!(back < Duration::from_millis(1000), "{back:?}");
+        streams.shutdown();
+    }
+
+    /// Plays a tone through a link with the delay and volume; returns when it was heard and how loud per channel
+    fn tone_through(render_id: &str, capture_id: &str, delay: f32, gain: Gain) -> (Duration, [f64; 2]) {
         let mut capture = Worker::<Producer>::new();
         let (heard_in, heard) = ring(RATE * CHANNELS);
         lock(&capture.links).push(("test".into(), heard_in));
@@ -404,6 +475,7 @@ mod tests {
         let mut render = Worker::<LinkReader>::new();
         let (tone, reader) = link();
         reader.set_delay(delay);
+        reader.set_gain(gain);
         lock(&render.links).push(("test".into(), reader));
         render.supervise(render_id, render_thread);
         std::thread::sleep(Duration::from_millis(300));
@@ -411,7 +483,7 @@ mod tests {
 
         // a 440 Hz tone in 10 ms packets; the cable output is listened to all this time
         let started = Instant::now();
-        let (mut phase, mut onset, mut energy, mut count) = (0usize, None, 0.0f64, 0usize);
+        let (mut phase, mut onset, mut energy, mut count) = (0usize, None, [0.0f64; 2], 0usize);
         let mut buf = vec![0.0f32; RATE * CHANNELS];
         let delay = Duration::from_secs_f32(delay);
         while started.elapsed() < Duration::from_millis(1500) + delay {
@@ -430,15 +502,17 @@ mod tests {
                 onset = Some(started.elapsed());
             }
             if started.elapsed() > Duration::from_millis(700) + delay {
-                energy += buf[..n].iter().map(|&s| (s as f64) * (s as f64)).sum::<f64>();
-                count += n;
+                for (i, &s) in buf[..n].iter().enumerate() {
+                    energy[i % 2] += (s as f64) * (s as f64);
+                }
+                count += n / 2;
             }
         }
-        let rms = (energy / count.max(1) as f64).sqrt();
-        println!("sound at the cable output after {onset:?}, level (RMS) {rms:.3}, expected ~0.354");
+        let rms = energy.map(|e| (e / count.max(1) as f64).sqrt());
+        println!("sound at the cable output after {onset:?}, level (RMS) {rms:.3?}, expected ~0.354 times the volume");
         render.shutdown();
         capture.shutdown();
-        assert!(onset.is_some() && rms > 0.1, "the tone didn't arrive");
-        onset.unwrap()
+        assert!(onset.is_some() && rms[0].max(rms[1]) > 0.1, "the tone didn't arrive");
+        (onset.unwrap(), rms)
     }
 }

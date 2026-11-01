@@ -7,6 +7,7 @@
 
 use libpulse_binding as pa;
 use pa::callbacks::ListResult;
+use pa::channelmap::{Map, Position};
 use pa::context::introspect::{SinkInputInfo, SourceOutputInfo};
 use pa::context::{Context, FlagSet, State};
 use pa::mainloop::standard::Mainloop;
@@ -50,6 +51,8 @@ pub struct Stream {
     pub corked: bool,
     pub volume: ChannelVolumes,
     pub volume_writable: bool,
+    /// Which channel is where: balance needs to know left from right
+    pub channel_map: Map,
     /// The app's executable file name (application.process.binary)
     pub binary: Option<String>,
     pub pid: Option<u32>,
@@ -96,6 +99,7 @@ fn sink_input(i: &SinkInputInfo) -> Stream {
         corked: i.corked,
         volume: i.volume,
         volume_writable: i.volume_writable,
+        channel_map: i.channel_map,
         binary,
         pid,
         app_name,
@@ -112,10 +116,27 @@ fn source_output(i: &SourceOutputInfo) -> Stream {
         corked: i.corked,
         volume: i.volume,
         volume_writable: i.volume_writable,
+        channel_map: i.channel_map,
         binary,
         pid,
         app_name,
     }
+}
+
+/// Volume per channel as amplitude factors: left channels get the left one, right channels
+/// the right one, the others (mono, center, LFE) the louder of the two
+pub fn linear_balanced(map: &Map, [left, right]: [f32; 2]) -> ChannelVolumes {
+    use Position::*;
+    let mut v = linear(map.len(), left.max(right));
+    for (volume, position) in v.get_mut().iter_mut().zip(map.get()) {
+        let gain = match position {
+            FrontLeft | RearLeft | SideLeft | FrontLeftOfCenter | TopFrontLeft | TopRearLeft => left,
+            FrontRight | RearRight | SideRight | FrontRightOfCenter | TopFrontRight | TopRearRight => right,
+            _ => continue,
+        };
+        *volume = Volume::from(VolumeLinear(f64::from(gain.max(0.0))));
+    }
+    v
 }
 
 /// Volume as an amplitude factor: 0.5 is half as loud, 2 twice as loud

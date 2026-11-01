@@ -3,8 +3,9 @@
 
 use crate::engine::Engine;
 use crate::graphs::DeviceRef;
-use crate::storage::{check_id, clean_name, err, now_ms, write_atomic, CmdResult};
+use crate::storage::{check_id, clean_name, err, now_ms, unique_name, write_atomic, CmdResult};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -85,6 +86,56 @@ impl CableStore {
         engine.cables_changed(file.cables);
         Ok(())
     }
+
+    /// Cables of an imported graph join the list (see merge). Returns the ids to put into the graph's nodes
+    pub fn adopt(&self, incoming: &[Cable], engine: &Engine) -> CmdResult<HashMap<String, String>> {
+        let _guard = self.lock.lock().map_err(err)?;
+        let mut cables = self.read()?;
+        let count = cables.len();
+        let ids = merge(&mut cables, incoming)?;
+        if cables.len() > count {
+            self.write(cables, engine)?;
+        }
+        Ok(ids)
+    }
+}
+
+/// Each incoming cable becomes a cable of the list: an existing one with the same id or the same devices,
+/// a new one otherwise. Returns incoming id → id in the list
+fn merge(cables: &mut Vec<Cable>, incoming: &[Cable]) -> CmdResult<HashMap<String, String>> {
+    let device = |d: &Option<DeviceRef>| match d {
+        Some(DeviceRef::Device { id, .. }) => Some(id.clone()),
+        _ => None,
+    };
+    let mut ids = HashMap::new();
+    for cable in incoming {
+        let sides = (device(&cable.render), device(&cable.capture));
+        let has_device = sides.0.is_some() || sides.1.is_some();
+        let existing = cables
+            .iter()
+            .find(|c| c.id == cable.id)
+            .or_else(|| cables.iter().find(|c| has_device && (device(&c.render), device(&c.capture)) == sides));
+        let id = match existing {
+            Some(c) => c.id.clone(),
+            None => {
+                let name = unique_name(&clean_name(&cable.name)?, cables.iter().map(|c| c.name.as_str()));
+                // "default" makes no sense for a cable (check_device): such a side stays empty
+                let side = |d: &Option<DeviceRef>| d.clone().filter(|d| *d != DeviceRef::Default);
+                let new = Cable {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    name,
+                    render: side(&cable.render),
+                    capture: side(&cable.capture),
+                    created_at: now_ms(),
+                };
+                let id = new.id.clone();
+                cables.push(new);
+                id
+            }
+        };
+        ids.insert(cable.id.clone(), id);
+    }
+    Ok(ids)
 }
 
 #[tauri::command]
@@ -146,4 +197,38 @@ pub fn cable_delete(store: State<CableStore>, engine: State<Engine>, id: String)
     let mut cables = store.read()?;
     cables.retain(|c| c.id != id);
     store.write(cables, &engine)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cable(id: &str, name: &str, render: Option<&str>) -> Cable {
+        Cable {
+            id: id.into(),
+            name: name.into(),
+            render: render.map(|r| DeviceRef::Device { id: r.into(), name: r.into() }),
+            capture: None,
+            created_at: 0,
+        }
+    }
+
+    #[test]
+    fn imported_cables_join_the_list() {
+        let mut list = vec![cable("1", "Line 1", Some("dev-1")), cable("2", "Calls", None)];
+        let incoming = [
+            // the same cable exported from this computer
+            cable("1", "Line 1", Some("dev-1")),
+            // another computer's cable of the same device
+            cable("x", "VAC", Some("dev-1")),
+            // a cable this computer doesn't have; its name is taken
+            cable("y", "Calls", Some("dev-9")),
+        ];
+        let ids = merge(&mut list, &incoming).unwrap();
+        assert_eq!(ids["1"], "1");
+        assert_eq!(ids["x"], "1");
+        assert_eq!(list.len(), 3);
+        assert_eq!(ids["y"], list[2].id);
+        assert_eq!(list[2].name, "Calls 2");
+    }
 }

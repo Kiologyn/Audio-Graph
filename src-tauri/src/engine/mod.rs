@@ -13,8 +13,11 @@ pub(crate) mod plan;
 mod ring;
 #[cfg(windows)]
 mod win;
+#[cfg(windows)]
+pub(crate) use win::probe;
 
 use crate::cables::Cable;
+use crate::devices::{AudioDevice, Flow};
 use crate::graphs::{DeviceRef, Graph, GraphStore, NodeKind};
 use crate::settings::Settings;
 use crate::storage::CmdResult;
@@ -102,6 +105,7 @@ impl Backend {
     fn apply(&mut self, _: &plan::Plan) -> (Vec<StreamStatus>, Vec<AppStatus>) {
         (Vec::new(), Vec::new())
     }
+    fn retry_now(&mut self) {}
     fn shutdown(&mut self) {}
 }
 
@@ -125,8 +129,15 @@ enum Msg {
     Toggle,
     /// A volume slider is moving: apply at once without waiting for autosave
     Volume { graph: String, node: String, volume: f32 },
+    /// A balance slider is moving, the same way
+    Balance { graph: String, node: String, balance: f32 },
     /// Settings changed: message and tray language, turning cables off
     Settings { disable_idle_cables: bool },
+    /// A device was plugged in, unplugged, turned on or off: reconnect at once
+    DevicesChanged,
+    /// Delay calibration: the engine's sound is silent for this long so the microphone hears only the test
+    /// signal; zero ends it. A time limit, so a closed window can't leave the sound off
+    Quiet(Duration),
     /// App exit: stop everything, give apps back their devices and reply
     Shutdown(mpsc::Sender<()>),
 }
@@ -142,6 +153,10 @@ impl Engine {
         let status = Arc::new(Mutex::new(EngineStatus::default()));
         let shared = status.clone();
         let disable_idle_cables = settings.disable_idle_cables;
+        let watcher = tx.clone();
+        crate::devices::watch(move || {
+            let _ = watcher.send(Msg::DevicesChanged);
+        });
         std::thread::Builder::new()
             .name("audio engine".into())
             .spawn(move || supervise(rx, app, &data_dir, cables, disable_idle_cables, &shared))
@@ -167,6 +182,11 @@ impl Engine {
 
     pub fn cables_changed(&self, cables: Vec<Cable>) {
         self.send(Msg::Cables(cables));
+    }
+
+    /// Starts a graph; refreshes one that already runs
+    pub fn start(&self, graph: &Graph) {
+        self.send(Msg::Start(graph.clone()));
     }
 
     pub fn toggle(&self) {
@@ -246,6 +266,9 @@ fn supervise(
     // what is already in the log: every error is written when it appears
     let mut logged_running: Vec<String> = Vec::new();
     let mut logged_errors: HashSet<String> = HashSet::new();
+    let mut quiet_until: Option<std::time::Instant> = None;
+    // the system's devices: chosen devices that changed their id are found in it by name
+    let mut devices = crate::devices::list().unwrap_or_default();
     let same = |g: &Option<Graph>, id: &str| g.as_ref().is_some_and(|g| g.id == id);
 
     loop {
@@ -257,6 +280,7 @@ fn supervise(
         }
         // a burst of changes (autosave while dragging) is applied at once
         messages.extend(rx.try_iter());
+        let mut devices_changed = false;
         for msg in messages {
             match msg {
                 Msg::Opened(g) => opened = Some(g),
@@ -288,6 +312,13 @@ fn supervise(
                         }
                     }
                 }
+                Msg::Balance { graph, node, balance } => {
+                    for g in running.iter_mut().chain(opened.as_mut()).filter(|g| g.id == graph) {
+                        if let Some(n) = g.nodes.iter_mut().find(|n| n.id == node) {
+                            n.balance = balance;
+                        }
+                    }
+                }
                 Msg::Toggle => {
                     if let Some(o) = &opened {
                         if running.iter().any(|r| r.id == o.id) {
@@ -306,7 +337,15 @@ fn supervise(
                     running.clear();
                     reply = Some(tx);
                 }
+                Msg::DevicesChanged => devices_changed = true,
+                Msg::Quiet(time) => quiet_until = (!time.is_zero()).then(|| std::time::Instant::now() + time),
             }
+        }
+        if devices_changed {
+            devices = crate::devices::list().unwrap_or(devices);
+            // streams of a device that is back open now, not after their retry pause
+            backend.retry_now();
+            let _ = app.emit("devices-changed", ());
         }
 
         // a graph's cables are turned on before the engine opens their devices
@@ -322,8 +361,13 @@ fn supervise(
         let defaults = backend.defaults();
         // the open but stopped graph is checked last: it shows what it will run into when started
         let opened_running = opened.as_ref().is_some_and(|o| running.iter().any(|r| r.id == o.id));
-        let mut checked: Vec<&Graph> = running.iter().collect();
-        checked.extend(opened.as_ref().filter(|_| !opened_running));
+        let resolved: Vec<Graph> = running
+            .iter()
+            .chain(opened.as_ref().filter(|_| !opened_running))
+            .map(|g| resolve_devices(g, &devices))
+            .collect();
+        let checked: Vec<&Graph> = resolved.iter().collect();
+        let listed: Vec<Cable> = cables.iter().map(|c| resolve_cable(c, &devices)).collect();
         let plans = if DYNAMIC_CABLES {
             // every cable node has its own virtual device: the plan is the same as with listed cables
             let virtualized: Vec<_> = checked.iter().map(|g| plan::virtualize(g)).collect();
@@ -335,14 +379,18 @@ fn supervise(
             }
             plans
         } else {
-            plan::compile_all(&checked, &cables, &defaults)
+            plan::compile_all(&checked, &listed, &defaults)
         };
         let mut plans = plans;
         // delays only in graphs that have them turned on
         let limits: Vec<Option<f32>> = checked.iter().map(|g| g.delay_limit()).collect();
         plan::apply_delays(&mut plans, running.len(), &limits);
         // while nothing runs the plan is empty: streams close, apps get their devices back
-        let (streams, apps) = backend.apply(&plan::merge(&plans[..running.len()]));
+        let mut merged = plan::merge(&plans[..running.len()]);
+        if quiet_until.is_some_and(|t| t > std::time::Instant::now()) {
+            merged.streams.iter_mut().flat_map(|s| &mut s.sources).for_each(|s| s.gain = [0.0; 2]);
+        }
+        let (streams, apps) = backend.apply(&merged);
         let shown = opened.as_ref().or(running.first());
         let issues = shown
             .and_then(|s| checked.iter().position(|g| g.id == s.id))
@@ -407,6 +455,32 @@ fn supervise(
     }
 }
 
+/// A chosen device's id as the system has it now (devices::find); unchanged if it isn't found
+fn resolve_device(device: &mut Option<DeviceRef>, flow: Flow, devices: &[AudioDevice]) {
+    if let Some(DeviceRef::Device { id, name }) = device {
+        if let Some(found) = crate::devices::find(devices, flow, id, name) {
+            *id = found.id.clone();
+        }
+    }
+}
+
+/// The graph with the ids of its chosen devices as the system has them now
+fn resolve_devices(graph: &Graph, devices: &[AudioDevice]) -> Graph {
+    let mut graph = graph.clone();
+    for node in &mut graph.nodes {
+        resolve_device(&mut node.sink, Flow::Render, devices);
+        resolve_device(&mut node.source, Flow::Capture, devices);
+    }
+    graph
+}
+
+fn resolve_cable(cable: &Cable, devices: &[AudioDevice]) -> Cable {
+    let mut cable = cable.clone();
+    resolve_device(&mut cable.render, Flow::Render, devices);
+    resolve_device(&mut cable.capture, Flow::Capture, devices);
+    cable
+}
+
 /// Logs graph starts and stops and new engine errors
 fn log_changes(running: &[Graph], status: &EngineStatus, last_running: &mut Vec<String>, last_errors: &mut HashSet<String>) {
     for g in running.iter().filter(|g| !last_running.contains(&g.id)) {
@@ -453,6 +527,21 @@ pub fn engine_start(engine: State<Engine>, graphs: State<GraphStore>, id: String
 #[tauri::command]
 pub fn engine_stop(engine: State<Engine>, id: Option<String>) {
     engine.send(Msg::Stop(id));
+}
+
+/// Delay calibration: silence the engine's sound for this many seconds, 0 brings it back
+#[tauri::command]
+pub fn engine_quiet(engine: State<Engine>, seconds: f32) {
+    engine.send(Msg::Quiet(Duration::from_secs_f32(seconds.clamp(0.0, 60.0))));
+}
+
+#[tauri::command]
+pub fn engine_balance(engine: State<Engine>, graph: String, node: String, balance: f32) {
+    engine.send(Msg::Balance {
+        graph,
+        node,
+        balance: balance.clamp(-1.0, 1.0),
+    });
 }
 
 #[tauri::command]

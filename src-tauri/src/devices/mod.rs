@@ -7,6 +7,9 @@ use serde::Serialize;
 mod linux;
 #[cfg(windows)]
 mod pairs;
+mod watch;
+
+pub use watch::watch;
 #[cfg(windows)]
 pub(crate) mod win;
 
@@ -59,6 +62,22 @@ pub fn list() -> Result<Vec<AudioDevice>, String> {
     Ok(Vec::new())
 }
 
+/// A chosen device in the list: the one with its id, or if the system no longer has that id
+/// (plugged into another USB port, another Bluetooth profile on Linux) the only device on
+/// of that direction with the same name. Matches findDevice in src/graph/devices.ts
+pub fn find<'a>(devices: &'a [AudioDevice], flow: Flow, id: &str, name: &str) -> Option<&'a AudioDevice> {
+    if let Some(d) = devices.iter().find(|d| d.flow == flow && d.id == id) {
+        return Some(d);
+    }
+    let mut same = devices
+        .iter()
+        .filter(|d| d.flow == flow && d.state == DeviceState::Active && !d.is_virtual && d.name == name);
+    match (same.next(), same.next()) {
+        (Some(d), None) => Some(d),
+        _ => None,
+    }
+}
+
 /// Turns devices on or off the way the system's sound settings do
 pub fn set_enabled(ids: &[String], enabled: bool) -> Result<(), String> {
     #[cfg(windows)]
@@ -100,6 +119,38 @@ pub async fn set_devices_enabled(ids: Vec<String>, enabled: bool) -> Result<(), 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn device(id: &str, name: &str, state: DeviceState) -> AudioDevice {
+        AudioDevice {
+            id: id.into(),
+            name: name.into(),
+            flow: Flow::Render,
+            state,
+            is_default: false,
+            is_virtual: false,
+            pair: None,
+            pair_name: None,
+        }
+    }
+
+    #[test]
+    fn finds_a_device_under_a_new_id() {
+        let list = [
+            device("usb-port-2", "Headphones (USB)", DeviceState::Active),
+            device("bt", "Speakers", DeviceState::Active),
+            device("bt-2", "Speakers", DeviceState::Active),
+            device("off", "Mic", DeviceState::Disabled),
+        ];
+        let id = |id: &str, name: &str| find(&list, Flow::Render, id, name).map(|d| d.id.as_str());
+        assert_eq!(id("bt", "Old name"), Some("bt"));
+        // the same headphones in another USB port
+        assert_eq!(id("usb-port-1", "Headphones (USB)"), Some("usb-port-2"));
+        // two devices with the name: which one is meant is unknown
+        assert_eq!(id("gone", "Speakers"), None);
+        // a turned off device isn't a replacement
+        assert_eq!(id("gone", "Mic"), None);
+        assert_eq!(find(&list, Flow::Capture, "usb-port-1", "Headphones (USB)").map(|d| &d.id), None);
+    }
 
     /// Prints this machine's devices and the enumeration time:
     /// cargo test devices -- --nocapture
@@ -144,10 +195,11 @@ mod tests {
     #[test]
     #[ignore]
     fn toggles_vac_capture() {
+        // only devices that are on: a cable turned off by the user stays off
         let vac: Vec<_> = list()
             .unwrap()
             .into_iter()
-            .filter(|d| d.name.contains("Virtual Audio Cable"))
+            .filter(|d| d.name.contains("Virtual Audio Cable") && d.state == DeviceState::Active)
             .collect();
         assert!(!vac.is_empty(), "no Virtual Audio Cable devices");
         let ids: Vec<String> = vac.iter().map(|d| d.id.clone()).collect();

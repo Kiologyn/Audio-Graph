@@ -13,12 +13,16 @@ The graph above sends Spotify to the headphones and, at the same time, mixes it 
 - **Cables.** A cable mixes everything that goes into it and passes it on. On Windows a cable is either a mix point inside the app or a pair of devices of a virtual cable driver. On Linux every cable node is a virtual device that the graph creates while it runs and that other programs can use too.
 - **Finding cables (Windows).** *Find cables* in the **Cables** menu adds the device pairs of installed virtual cable drivers, recognized by the drivers' device properties. A cable whose input and output belong to different driver lines gets a warning. A cable with only its input chosen still works for devices: the app records what is played into the input.
 - **Volume on every node.** Devices and cables go from 0 to 200%; apps go up to 100% (their volume in the system mixer).
+- **Balance.** A left-right slider under the volume of inputs, cables and outputs, turned on per graph in its options. Like delay, it applies to sound that Audio Graph plays, not to an app or the System node connected straight to an output.
 - **Output delay.** A slider on Output nodes shifts their sound in time, for example to match speakers to Bluetooth headphones. Plus plays the output later, minus earlier than the other outputs (sound can't play early, so the other outputs are delayed instead). The range is ±0.5 s by default and up to ±1 s, in 1 ms steps. Only sound that Audio Graph plays can be delayed: an app or the System node connected straight to an output plays through the system, and the node says so.
-- **Graph options.** The arrow in a graph's row of the graph list opens its options: volume sliders, delay sliders and the delay range. While a graph's delay sliders are off, its delays aren't applied. The ready-made graphs of a first start have them on; graphs made later start without them.
+- **Delay calibration.** *Calibrate delays* in a graph's options plays a short sweep on each of its outputs in turn while a microphone listens, and sets the delays from the measured latencies so the outputs play together: the fastest output keeps no delay, and the late ones get a negative delay as large as their lag, widening the delay range if needed. *Listen* plays a tick on all of them at once with those delays to check by ear; the graph's sound is muted while measuring.
+- **Graph options.** The arrow in a graph's row of the graph list opens its options: volume sliders, balance sliders, delay sliders and the delay range, and starting the graph with the app. *Export to a file* there writes the graph with the cables it uses; the button next to *New graph* imports such a file, adding missing cables to the cable list. While a graph's delay sliders are off, its delays aren't applied. The ready-made graphs of a first start have them on; graphs made later start without them.
 - **Several graphs at once.** Run them from the graph list; drag graphs and cables by their handles to reorder the lists. A running dot shows which ones are active, and it turns red if something is wrong.
 - **Problems are shown in place.** Missing devices, loops, an app connected to two outputs, conflicts between running graphs: the node gets a red note, the arrow turns red, and the header lists everything.
+- **Devices that come and go.** When a chosen device is unplugged, its node says so; when it is back, the graph picks it up within a moment. A device that comes back under another id (other USB port, another Bluetooth profile on Linux) is found by its name, as long as only one device has that name.
 - **Everything is put back.** When a graph stops or the app quits, apps get their previous devices and volumes, and the system gets its previous default devices. If the app is killed, this happens on the next start.
 - **Tray.** Closing the window hides it to the tray; graphs keep running. Start, stop and quit from the tray menu. Starting the app again shows the hidden window.
+- **Start with the system.** The installed app (not the portable file or the AppImage) can start in the tray when you sign in, and start the graphs marked in their options.
 - **Settings.** Light, dark or system theme; English, Russian, Spanish, Chinese or Japanese; hiding the graph map; volume sliders in new graphs; on Windows, turning the cables of a graph off while it isn't running.
 
 ## Requirements
@@ -102,7 +106,8 @@ The app keeps its data in `%APPDATA%\dev.audiograph.app` on Windows and `~/.loca
 | `src-tauri/src/engine/plan.rs` | Turns graphs into a plan: app routing, engine streams, virtual cables, problems |
 | `src-tauri/src/engine/win/` | Executes the plan on Windows: audio streams (`streams.rs`) and Windows device settings (`router.rs`) |
 | `src-tauri/src/engine/linux.rs` | Executes the plan on Linux through the audio server (`src-tauri/src/pulse.rs`) |
-| `src-tauri/src/` | Storage of graphs, cables and settings, device and app lists, the tray |
+| `src-tauri/src/calibrate/` | Delay calibration: plays the sweep, records the microphone and finds the sweep in the recording |
+| `src-tauri/src/` | Storage of graphs, cables and settings, device and app lists and their changes, autostart, the tray |
 
 ## Translations
 

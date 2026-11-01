@@ -21,6 +21,10 @@ const uiPaths = {
   plus: "M12 5v14M5 12h14",
   check: "m5 12 5 5 9-10",
   search: "M10.5 4a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13ZM15.5 15.5 20 20",
+  // an arrow into a tray: take in from a file
+  import: "M12 4v11m-4.5-4.5L12 15l4.5-4.5M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3",
+  // an arrow out of a tray: write out into a file
+  export: "M12 15V4M7.5 8.5 12 4l4.5 4.5M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3",
   // six dots: a handle to drag a row by
   grip: "M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01",
   // two nodes joined by an edge

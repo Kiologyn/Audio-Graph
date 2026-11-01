@@ -47,26 +47,33 @@ function VirtualCable({ label }: { label: string }) {
   );
 }
 
-/** A node's volume slider. Double-clicking the percentage resets it to 100% */
-function VolumeSlider({ id, value, max }: { id: string; value: number; max: number }) {
-  const setVolume = useGraph((s) => s.setVolume);
+/** Sends a slider's value to the engine at most once per 50 ms: dragging fires far more events */
+function useLiveSend(send: (graphId: string, value: number) => void) {
   const graphId = useGraph((s) => s.meta?.id);
-  const t = useT();
-  // to the engine at most once per 50 ms: dragging fires far more events
   const last = useRef(0);
   const pending = useRef<number | null>(null);
-  const change = (volume: number) => {
-    setVolume(id, volume);
+  return (value: number) => {
     if (!graphId) return;
-    const send = () => {
+    const now = () => {
       last.current = Date.now();
       pending.current = null;
-      useEngine.getState().volume(graphId, id, volume);
+      send(graphId, value);
     };
     if (pending.current !== null) clearTimeout(pending.current);
     const wait = 50 - (Date.now() - last.current);
-    if (wait <= 0) send();
-    else pending.current = window.setTimeout(send, wait);
+    if (wait <= 0) now();
+    else pending.current = window.setTimeout(now, wait);
+  };
+}
+
+/** A node's volume slider. Double-clicking the percentage resets it to 100% */
+function VolumeSlider({ id, value, max }: { id: string; value: number; max: number }) {
+  const setVolume = useGraph((s) => s.setVolume);
+  const send = useLiveSend((graphId, volume) => useEngine.getState().volume(graphId, id, volume));
+  const t = useT();
+  const change = (volume: number) => {
+    setVolume(id, volume);
+    send(volume);
   };
   const percent = Math.round(value * 100);
   return (
@@ -82,6 +89,38 @@ function VolumeSlider({ id, value, max }: { id: string; value: number; max: numb
       />
       <span className={`ag-volume__value${percent > 100 ? " is-boost" : ""}`} onDoubleClick={() => change(1)}>
         {percent}%
+      </span>
+    </div>
+  );
+}
+
+/** A node's left-right balance: the middle is even, the fill goes from it to the knob. Double-clicking the value centers it */
+function BalanceSlider({ id, value }: { id: string; value: number }) {
+  const setBalance = useGraph((s) => s.setBalance);
+  const send = useLiveSend((graphId, balance) => useEngine.getState().balance(graphId, id, balance));
+  const t = useT();
+  const change = (balance: number) => {
+    setBalance(id, balance);
+    send(balance);
+  };
+  const percent = Math.round(value * 100);
+  const at = 0.5 + value / 2;
+  const text = percent === 0 ? "0" : t(percent < 0 ? "balance_left" : "balance_right", { percent: Math.abs(percent) });
+  return (
+    <div className="ag-volume ag-balance nodrag" title={t("balance_hint")}>
+      <span className="ag-balance__edge">{t("balance_left_short")}</span>
+      <input
+        type="range"
+        min={-100}
+        max={100}
+        step={1}
+        value={percent}
+        style={{ "--from": `${Math.min(at, 0.5) * 100}%`, "--to": `${Math.max(at, 0.5) * 100}%` } as CSSProperties}
+        onChange={(e) => change(Number(e.currentTarget.value) / 100)}
+      />
+      <span className="ag-balance__edge">{t("balance_right_short")}</span>
+      <span className={`ag-volume__value${percent !== 0 ? " is-boost" : ""}`} onDoubleClick={() => change(0)}>
+        {text}
       </span>
     </div>
   );
@@ -142,6 +181,7 @@ function AudioNodeView({ id, data, selected }: NodeProps<AudioNode>) {
   const cables = useCables((s) => s.cables);
   const devices = useDevices((s) => s.devices);
   const showVolume = useGraph((s) => s.meta?.showVolume ?? true);
+  const showBalance = useGraph((s) => s.meta?.showBalance ?? false);
   const showDelay = useGraph((s) => s.meta?.showDelay ?? false);
   const delayLimit = useGraph((s) => s.meta?.delayLimit ?? 0.5);
   const t = useT();
@@ -229,6 +269,8 @@ function AudioNodeView({ id, data, selected }: NodeProps<AudioNode>) {
       {meta.showDefaults && <SystemDefaults />}
 
       {showVolume && meta.maxVolume && <VolumeSlider id={id} value={data.volume ?? 1} max={meta.maxVolume} />}
+
+      {showBalance && meta.balance && <BalanceSlider id={id} value={data.balance ?? 0} />}
 
       {showDelay && meta.delay && <DelaySlider id={id} value={data.delay ?? 0} limit={delayLimit} />}
 

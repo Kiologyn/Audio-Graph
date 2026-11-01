@@ -41,6 +41,8 @@ type EngineState = {
   stop: (graphId: string) => Promise<void>;
   /** Node volume on the fly while the slider moves: the engine doesn't wait for autosave */
   volume: (graphId: string, node: string, volume: number) => void;
+  /** Node balance on the fly, the same way */
+  balance: (graphId: string, node: string, balance: number) => void;
 };
 
 let initOnce = false;
@@ -62,6 +64,8 @@ export const useEngine = create<EngineState>()((set, get) => ({
       useDevices.getState().refresh();
     });
     invoke<EngineStatus>("engine_status").then((status) => set({ status }));
+    // a device was plugged in or out, turned on or off: nodes show it at once
+    listen("devices-changed", () => useDevices.getState().refresh());
   },
 
   start: async (graphId) => {
@@ -79,6 +83,10 @@ export const useEngine = create<EngineState>()((set, get) => ({
 
   volume: (graphId, node, volume) => {
     invoke("engine_volume", { graph: graphId, node, volume }).catch(() => {});
+  },
+
+  balance: (graphId, node, balance) => {
+    invoke("engine_balance", { graph: graphId, node, balance }).catch(() => {});
   },
 
   stop: async (graphId) => {

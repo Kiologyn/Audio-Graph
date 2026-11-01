@@ -1,8 +1,10 @@
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { create } from "zustand";
 import { t } from "../i18n";
 import { useSettings } from "../settings";
 import { graphsApi } from "./api";
-import { edgesToDoc, nodesToDoc, type GraphDoc, type GraphMeta, type GraphSliders } from "./doc";
+import { useCables } from "./cables";
+import { edgesToDoc, nodesToDoc, type GraphDoc, type GraphMeta, type GraphPrefs } from "./doc";
 import { uniqueName } from "./names";
 import { starterGraphs, useGraph } from "./store";
 import type { AudioEdge, AudioNode } from "./types";
@@ -20,11 +22,18 @@ type LibraryState = {
   create: () => Promise<string>;
   rename: (id: string, name: string) => Promise<void>;
   /** The graph's volume and delay sliders and the delay range */
-  setSliders: (id: string, patch: Partial<GraphSliders>) => Promise<void>;
+  setPrefs: (id: string, patch: Partial<GraphPrefs>) => Promise<void>;
   remove: (id: string) => Promise<void>;
   /** Puts the list in this order of graph ids */
   reorder: (ids: string[]) => Promise<void>;
+  /** Writes a graph into a file the user chooses; false if they cancelled */
+  exportGraph: (id: string) => Promise<boolean>;
+  /** Adds a graph from a file the user chooses and opens it; false if they cancelled */
+  importGraph: () => Promise<boolean>;
 };
+
+/** The file type of exported graphs in the file dialogs */
+const GRAPH_FILES = [{ name: "Audio Graph", extensions: ["json"] }];
 
 /** Pause after the last change before writing to disk */
 const SAVE_DELAY_MS = 300;
@@ -46,6 +55,8 @@ function snapshot(): GraphDoc | null {
     showVolume: meta.showVolume,
     showDelay: meta.showDelay,
     delayLimit: meta.delayLimit,
+    startOnLaunch: meta.startOnLaunch,
+    showBalance: meta.showBalance,
   };
 }
 
@@ -53,7 +64,18 @@ function snapshot(): GraphDoc | null {
 // so their changes don't trigger a save
 const contentKey = (doc: GraphDoc | null) =>
   doc
-    ? JSON.stringify([doc.id, doc.name, doc.viewport, doc.nodes, doc.edges, doc.showVolume, doc.showDelay, doc.delayLimit])
+    ? JSON.stringify([
+        doc.id,
+        doc.name,
+        doc.viewport,
+        doc.nodes,
+        doc.edges,
+        doc.showVolume,
+        doc.showDelay,
+        doc.delayLimit,
+        doc.startOnLaunch,
+        doc.showBalance,
+      ])
     : "";
 
 let savedKey = "";
@@ -106,14 +128,16 @@ useGraph.subscribe((state, prev) => {
 
 // ---------- library ----------
 
-const metaOf = ({ id, name, createdAt, updatedAt, showVolume, showDelay, delayLimit }: GraphDoc): GraphMeta => ({
+const metaOf = ({ id, name, createdAt, updatedAt, showVolume, showBalance, showDelay, delayLimit, startOnLaunch }: GraphDoc): GraphMeta => ({
   id,
   name,
   createdAt,
   updatedAt,
   showVolume,
+  showBalance,
   showDelay,
   delayLimit,
+  startOnLaunch,
 });
 
 /** A graph from the old autosave in localStorage (before files existed) */
@@ -217,15 +241,15 @@ export const useLibrary = create<LibraryState>()((set, get) => {
         else await graphsApi.rename(id, trimmed);
       }),
 
-    setSliders: (id, patch) =>
+    setPrefs: (id, patch) =>
       guard(async () => {
         const graph = get().graphs.find((g) => g.id === id);
         if (!graph) return;
         const next = { ...graph, ...patch };
         set((s) => ({ graphs: s.graphs.map((g) => (g.id === id ? next : g)) }));
         // autosave saves the open graph, the others go through a separate command
-        if (useGraph.getState().meta?.id === id) useGraph.getState().setSliders(patch);
-        else await graphsApi.setSliders(id, next);
+        if (useGraph.getState().meta?.id === id) useGraph.getState().setPrefs(patch);
+        else await graphsApi.setPrefs(id, next);
       }),
 
     reorder: (ids) =>
@@ -234,6 +258,31 @@ export const useLibrary = create<LibraryState>()((set, get) => {
         set({ graphs: ids.flatMap((id) => byId.get(id) ?? []) });
         await graphsApi.reorder(ids);
       }),
+
+    // errors go to the caller: the graph list shows them next to the buttons
+    exportGraph: async (id) => {
+      const graph = get().graphs.find((g) => g.id === id);
+      if (!graph) return false;
+      const path = await saveDialog({ defaultPath: `${graph.name}.json`, filters: GRAPH_FILES });
+      if (!path) return false;
+      // the open graph may have changes not yet on disk
+      if (useGraph.getState().meta?.id === id) await flushSave();
+      await graphsApi.exportTo(id, path);
+      return true;
+    },
+
+    importGraph: async () => {
+      const path = await openDialog({ multiple: false, directory: false, filters: GRAPH_FILES });
+      if (!path) return false;
+      await flushSave();
+      const doc = await graphsApi.importFrom(path);
+      set((s) => ({ graphs: [...s.graphs, metaOf(doc)] }));
+      useGraph.getState().loadDoc(doc);
+      markLoaded();
+      // the graph's cables may have joined the cable list
+      useCables.getState().load();
+      return true;
+    },
 
     remove: (id) =>
       guard(async () => {

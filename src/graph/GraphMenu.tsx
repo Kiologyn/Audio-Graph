@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useT } from "../i18n";
+import { useSettings } from "../settings";
+import { useCalibration } from "./Calibration";
 import { MAX_DELAY_LIMIT, type GraphMeta } from "./doc";
 import { useEngine } from "./engine";
 import { Icon } from "./icons";
@@ -10,12 +12,16 @@ import { useGraph } from "./store";
 
 type RowMode = "view" | "edit" | "confirm";
 
+/** The outcome of an export or import, shown under the list */
+type Transfer = { ok: boolean; text: string };
+
 function GraphRow({
   graph,
   current,
   mode,
   setMode,
   onOpen,
+  onExport,
   grip,
 }: {
   graph: GraphMeta;
@@ -23,6 +29,7 @@ function GraphRow({
   mode: RowMode;
   setMode: (mode: RowMode) => void;
   onOpen: () => void;
+  onExport: (result: Transfer) => void;
   /** The handle to drag the row by */
   grip: ReactNode;
 }) {
@@ -89,7 +96,7 @@ function GraphRow({
       <button className="ag-panel__name" onClick={onOpen} onDoubleClick={() => setMode("edit")} title={graph.name}>
         {graph.name}
       </button>
-      <GraphOptions graph={graph} />
+      <GraphOptions graph={graph} onExport={onExport} />
       <RunToggle id={graph.id} />
       <button className="ag-panel__action" title={t("rename")} onClick={() => setMode("edit")}>
         <Icon name="pencil" />
@@ -163,13 +170,16 @@ function SecondsField({
   );
 }
 
-/** The arrow in a graph's row: a menu with its volume and delay sliders and the delay range */
-function GraphOptions({ graph }: { graph: GraphMeta }) {
-  const setSliders = useLibrary((s) => s.setSliders);
+/** The arrow in a graph's row: a menu with its sliders, the delay range, starting with the app and export */
+function GraphOptions({ graph, onExport }: { graph: GraphMeta; onExport: (result: Transfer) => void }) {
+  const setPrefs = useLibrary((s) => s.setPrefs);
+  const exportGraph = useLibrary((s) => s.exportGraph);
+  const openGraph = useLibrary((s) => s.open);
   const anchor = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const t = useT();
   const showDelay = graph.showDelay ?? false;
+  const autostart = useSettings((s) => s.autostart);
   return (
     <>
       <button
@@ -187,11 +197,22 @@ function GraphOptions({ graph }: { graph: GraphMeta }) {
               <input
                 type="checkbox"
                 checked={graph.showVolume ?? true}
-                onChange={(e) => setSliders(graph.id, { showVolume: e.currentTarget.checked })}
+                onChange={(e) => setPrefs(graph.id, { showVolume: e.currentTarget.checked })}
               />
               <span>
                 {t("graph_volume_sliders")}
                 <small>{t("graph_volume_sliders_hint")}</small>
+              </span>
+            </label>
+            <label className="ag-graph-options__check">
+              <input
+                type="checkbox"
+                checked={graph.showBalance ?? false}
+                onChange={(e) => setPrefs(graph.id, { showBalance: e.currentTarget.checked })}
+              />
+              <span>
+                {t("graph_balance_sliders")}
+                <small>{t("graph_balance_sliders_hint")}</small>
               </span>
             </label>
             <div className="ag-graph-options__row">
@@ -199,7 +220,7 @@ function GraphOptions({ graph }: { graph: GraphMeta }) {
                 <input
                   type="checkbox"
                   checked={showDelay}
-                  onChange={(e) => setSliders(graph.id, { showDelay: e.currentTarget.checked })}
+                  onChange={(e) => setPrefs(graph.id, { showDelay: e.currentTarget.checked })}
                 />
                 <span>
                   {t("graph_delay_sliders")}
@@ -211,9 +232,47 @@ function GraphOptions({ graph }: { graph: GraphMeta }) {
                 max={MAX_DELAY_LIMIT}
                 disabled={!showDelay}
                 title={t("graph_delay_limit", { max: MAX_DELAY_LIMIT })}
-                onChange={(delayLimit) => setSliders(graph.id, { delayLimit })}
+                onChange={(delayLimit) => setPrefs(graph.id, { delayLimit })}
               />
             </div>
+            <label className={`ag-graph-options__check${autostart ? "" : " is-disabled"}`}>
+              <input
+                type="checkbox"
+                checked={graph.startOnLaunch ?? false}
+                disabled={!autostart}
+                onChange={(e) => setPrefs(graph.id, { startOnLaunch: e.currentTarget.checked })}
+              />
+              <span>
+                {t("graph_start_on_launch")}
+                <small>{t(autostart ? "graph_start_on_launch_hint" : "graph_start_on_launch_off")}</small>
+              </span>
+            </label>
+            <button
+              className="ag-graph-options__export"
+              title={t("calibration_open_hint")}
+              onClick={async () => {
+                setOpen(false);
+                // calibration works with the graph on the canvas
+                await openGraph(graph.id);
+                useCalibration.getState().setOpen(true);
+              }}
+            >
+              <Icon name="volume" />
+              {t("calibration_open")}
+            </button>
+            <button
+              className="ag-graph-options__export is-next"
+              onClick={() => {
+                setOpen(false);
+                exportGraph(graph.id).then(
+                  (done) => done && onExport({ ok: true, text: t("graph_exported", { name: graph.name }) }),
+                  (e) => onExport({ ok: false, text: t("graph_export_failed", { error: String(e) }) }),
+                );
+              }}
+            >
+              <Icon name="export" />
+              {t("graph_export")}
+            </button>
           </div>
         </Popover>
       )}
@@ -242,6 +301,8 @@ export function GraphMenu() {
   const open = useLibrary((s) => s.open);
   const create = useLibrary((s) => s.create);
   const reorder = useLibrary((s) => s.reorder);
+  const importGraph = useLibrary((s) => s.importGraph);
+  const [transfer, setTransfer] = useState<Transfer | null>(null);
   const current = useGraph((s) => s.meta);
   const runningCount = useEngine((s) => s.status.running.length);
   const [isOpen, setOpen] = useState(false);
@@ -257,6 +318,7 @@ export function GraphMenu() {
   const close = () => {
     setOpen(false);
     setActive(null);
+    setTransfer(null);
   };
 
   useEffect(() => {
@@ -315,6 +377,7 @@ export function GraphMenu() {
                   mode={active?.id === g.id ? active.mode : "view"}
                   setMode={(mode) => setActive(mode === "view" ? null : { id: g.id, mode })}
                   onOpen={() => open(g.id)}
+                  onExport={setTransfer}
                   grip={
                     <span className="ag-panel__grip" title={t("drag_to_reorder")} {...sortable.handle(g.id)}>
                       <Icon name="grip" />
@@ -329,7 +392,20 @@ export function GraphMenu() {
               <Icon name="plus" />
               {t("new_graph")}
             </button>
+            <button
+              className="ag-panel__add ag-graphs__import"
+              title={t("graph_import")}
+              onClick={() =>
+                importGraph().then(
+                  (done) => done && setTransfer({ ok: true, text: t("graph_imported") }),
+                  (e) => setTransfer({ ok: false, text: t("graph_import_failed", { error: String(e) }) }),
+                )
+              }
+            >
+              <Icon name="import" />
+            </button>
           </div>
+          {transfer && <div className={`ag-panel__note${transfer.ok ? "" : " is-error"}`}>{transfer.text}</div>}
         </div>
       )}
     </div>

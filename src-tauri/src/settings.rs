@@ -46,6 +46,8 @@ pub struct Settings {
     pub hide_minimap: bool,
     /// The volume checkbox of a new graph: whether its nodes show volume sliders
     pub new_graph_volume: bool,
+    /// Start with the system. The entry in the system is the truth: it is read on every request
+    pub autostart: bool,
 }
 
 impl Default for Settings {
@@ -56,6 +58,7 @@ impl Default for Settings {
             disable_idle_cables: false,
             hide_minimap: false,
             new_graph_volume: true,
+            autostart: false,
         }
     }
 }
@@ -112,7 +115,9 @@ impl SettingsStore {
     }
 
     pub fn get(&self) -> Settings {
-        self.current.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        let mut settings = self.current.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        settings.autostart = crate::autostart::enabled();
+        settings
     }
 }
 
@@ -124,6 +129,9 @@ pub fn settings_get(store: State<SettingsStore>) -> Settings {
 #[tauri::command]
 pub fn settings_set(store: State<SettingsStore>, engine: State<Engine>, settings: Settings) -> CmdResult<()> {
     let mut current = store.current.lock().map_err(err)?;
+    if settings.autostart != crate::autostart::enabled() {
+        crate::autostart::set(settings.autostart)?;
+    }
     let json = serde_json::to_vec_pretty(&settings).map_err(err)?;
     write_atomic(&store.path, &json).map_err(err)?;
     crate::i18n::set_language(settings.language);
