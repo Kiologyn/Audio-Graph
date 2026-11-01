@@ -217,6 +217,11 @@ impl Backend {
         })
     }
 
+    /// Devices changed: what failed may try again without waiting for its retry pause
+    pub fn retry_now(&mut self) {
+        self.failed.clear();
+    }
+
     pub fn apply(&mut self, plan: &Plan) -> (Vec<StreamStatus>, Vec<AppStatus>) {
         // nothing runs and nothing to restore: leave the server alone
         let idle = plan.virtual_cables.is_empty() && plan.streams.is_empty() && plan.routes.is_empty() && plan.system.is_none();

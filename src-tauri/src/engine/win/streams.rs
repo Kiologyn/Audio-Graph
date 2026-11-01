@@ -106,6 +106,11 @@ impl<T: Send + 'static> Worker<T> {
             .ok();
     }
 
+    /// The next supervise may start a failed stream at once
+    fn retry_now(&mut self) {
+        self.started = None;
+    }
+
     fn error(&self) -> Option<String> {
         if self.working.load(Ordering::Relaxed) {
             None
@@ -198,6 +203,11 @@ impl Streams {
                     .collect(),
             })
             .collect()
+    }
+
+    pub fn retry_now(&mut self) {
+        self.captures.values_mut().for_each(Worker::retry_now);
+        self.renders.values_mut().for_each(Worker::retry_now);
     }
 
     pub fn shutdown(&mut self) {
@@ -401,6 +411,58 @@ mod tests {
     fn vac_input_loopback() {
         let render_id = vac(Flow::Render);
         tone_through(&render_id, &format!("{LOOPBACK_PREFIX}{render_id}"), 0.0, [1.0; 2]);
+    }
+
+    /// Turns the VAC Line 1 recording device off and on under a running link (Line 1 → Line 2):
+    /// the stream must come back by itself. Changes the system state for a moment:
+    /// cargo test device_comes_back -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn device_comes_back() {
+        let _com = ComGuard::init();
+        let line = |n: &str, flow: Flow| {
+            list()
+                .unwrap()
+                .into_iter()
+                .find(|d| d.name.starts_with(&format!("Line {n} (Virtual Audio Cable")) && d.flow == flow && d.state == DeviceState::Active)
+                .expect("VAC lines 1 and 2 must be on")
+                .id
+        };
+        let (source, sink) = (line("1", Flow::Capture), line("2", Flow::Render));
+        let plan = [Stream {
+            sink: sink.clone(),
+            sources: vec![super::super::super::plan::Source { device: source.clone(), gain: [1.0; 2], delay: 0.0 }],
+            output: true,
+        }];
+        let mut streams = Streams::default();
+        let errors = |streams: &mut Streams| streams.apply(&plan)[0].errors.clone();
+        let wait = |streams: &mut Streams, broken: bool| {
+            let started = Instant::now();
+            while started.elapsed() < Duration::from_secs(10) {
+                if errors(streams).is_empty() != broken {
+                    return started.elapsed();
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            panic!("no change in 10 s");
+        };
+        wait(&mut streams, false);
+        crate::devices::set_enabled(&[source.clone()], false).unwrap();
+        let broke = wait(&mut streams, true);
+        println!("off: an error after {broke:?}: {:?}", errors(&mut streams));
+        crate::devices::set_enabled(&[source.clone()], true).unwrap();
+        let back = wait(&mut streams, false);
+        println!("on: working again after {back:?} by retrying");
+
+        // the same, but told that devices changed, as the device watch does
+        crate::devices::set_enabled(&[source.clone()], false).unwrap();
+        wait(&mut streams, true);
+        crate::devices::set_enabled(&[source.clone()], true).unwrap();
+        streams.retry_now();
+        let back = wait(&mut streams, false);
+        println!("on: working again after {back:?} when told");
+        assert!(back < Duration::from_millis(1000), "{back:?}");
+        streams.shutdown();
     }
 
     /// Plays a tone through a link with the delay and volume; returns when it was heard and how loud per channel

@@ -15,6 +15,7 @@ mod ring;
 mod win;
 
 use crate::cables::Cable;
+use crate::devices::{AudioDevice, Flow};
 use crate::graphs::{DeviceRef, Graph, GraphStore, NodeKind};
 use crate::settings::Settings;
 use crate::storage::CmdResult;
@@ -102,6 +103,7 @@ impl Backend {
     fn apply(&mut self, _: &plan::Plan) -> (Vec<StreamStatus>, Vec<AppStatus>) {
         (Vec::new(), Vec::new())
     }
+    fn retry_now(&mut self) {}
     fn shutdown(&mut self) {}
 }
 
@@ -129,6 +131,8 @@ enum Msg {
     Balance { graph: String, node: String, balance: f32 },
     /// Settings changed: message and tray language, turning cables off
     Settings { disable_idle_cables: bool },
+    /// A device was plugged in, unplugged, turned on or off: reconnect at once
+    DevicesChanged,
     /// App exit: stop everything, give apps back their devices and reply
     Shutdown(mpsc::Sender<()>),
 }
@@ -144,6 +148,10 @@ impl Engine {
         let status = Arc::new(Mutex::new(EngineStatus::default()));
         let shared = status.clone();
         let disable_idle_cables = settings.disable_idle_cables;
+        let watcher = tx.clone();
+        crate::devices::watch(move || {
+            let _ = watcher.send(Msg::DevicesChanged);
+        });
         std::thread::Builder::new()
             .name("audio engine".into())
             .spawn(move || supervise(rx, app, &data_dir, cables, disable_idle_cables, &shared))
@@ -253,6 +261,8 @@ fn supervise(
     // what is already in the log: every error is written when it appears
     let mut logged_running: Vec<String> = Vec::new();
     let mut logged_errors: HashSet<String> = HashSet::new();
+    // the system's devices: chosen devices that changed their id are found in it by name
+    let mut devices = crate::devices::list().unwrap_or_default();
     let same = |g: &Option<Graph>, id: &str| g.as_ref().is_some_and(|g| g.id == id);
 
     loop {
@@ -264,6 +274,7 @@ fn supervise(
         }
         // a burst of changes (autosave while dragging) is applied at once
         messages.extend(rx.try_iter());
+        let mut devices_changed = false;
         for msg in messages {
             match msg {
                 Msg::Opened(g) => opened = Some(g),
@@ -320,7 +331,14 @@ fn supervise(
                     running.clear();
                     reply = Some(tx);
                 }
+                Msg::DevicesChanged => devices_changed = true,
             }
+        }
+        if devices_changed {
+            devices = crate::devices::list().unwrap_or(devices);
+            // streams of a device that is back open now, not after their retry pause
+            backend.retry_now();
+            let _ = app.emit("devices-changed", ());
         }
 
         // a graph's cables are turned on before the engine opens their devices
@@ -336,8 +354,13 @@ fn supervise(
         let defaults = backend.defaults();
         // the open but stopped graph is checked last: it shows what it will run into when started
         let opened_running = opened.as_ref().is_some_and(|o| running.iter().any(|r| r.id == o.id));
-        let mut checked: Vec<&Graph> = running.iter().collect();
-        checked.extend(opened.as_ref().filter(|_| !opened_running));
+        let resolved: Vec<Graph> = running
+            .iter()
+            .chain(opened.as_ref().filter(|_| !opened_running))
+            .map(|g| resolve_devices(g, &devices))
+            .collect();
+        let checked: Vec<&Graph> = resolved.iter().collect();
+        let listed: Vec<Cable> = cables.iter().map(|c| resolve_cable(c, &devices)).collect();
         let plans = if DYNAMIC_CABLES {
             // every cable node has its own virtual device: the plan is the same as with listed cables
             let virtualized: Vec<_> = checked.iter().map(|g| plan::virtualize(g)).collect();
@@ -349,7 +372,7 @@ fn supervise(
             }
             plans
         } else {
-            plan::compile_all(&checked, &cables, &defaults)
+            plan::compile_all(&checked, &listed, &defaults)
         };
         let mut plans = plans;
         // delays only in graphs that have them turned on
@@ -419,6 +442,32 @@ fn supervise(
             return;
         }
     }
+}
+
+/// A chosen device's id as the system has it now (devices::find); unchanged if it isn't found
+fn resolve_device(device: &mut Option<DeviceRef>, flow: Flow, devices: &[AudioDevice]) {
+    if let Some(DeviceRef::Device { id, name }) = device {
+        if let Some(found) = crate::devices::find(devices, flow, id, name) {
+            *id = found.id.clone();
+        }
+    }
+}
+
+/// The graph with the ids of its chosen devices as the system has them now
+fn resolve_devices(graph: &Graph, devices: &[AudioDevice]) -> Graph {
+    let mut graph = graph.clone();
+    for node in &mut graph.nodes {
+        resolve_device(&mut node.sink, Flow::Render, devices);
+        resolve_device(&mut node.source, Flow::Capture, devices);
+    }
+    graph
+}
+
+fn resolve_cable(cable: &Cable, devices: &[AudioDevice]) -> Cable {
+    let mut cable = cable.clone();
+    resolve_device(&mut cable.render, Flow::Render, devices);
+    resolve_device(&mut cable.capture, Flow::Capture, devices);
+    cable
 }
 
 /// Logs graph starts and stops and new engine errors

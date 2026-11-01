@@ -32,6 +32,11 @@ impl Backend {
         (streams, apps)
     }
 
+    /// Devices changed: failed streams may try again without waiting for their retry pause
+    pub fn retry_now(&mut self) {
+        self.streams.retry_now();
+    }
+
     pub fn shutdown(&mut self) {
         self.streams.shutdown();
     }

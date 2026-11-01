@@ -64,6 +64,8 @@ export const useEngine = create<EngineState>()((set, get) => ({
       useDevices.getState().refresh();
     });
     invoke<EngineStatus>("engine_status").then((status) => set({ status }));
+    // a device was plugged in or out, turned on or off: nodes show it at once
+    listen("devices-changed", () => useDevices.getState().refresh());
   },
 
   start: async (graphId) => {
