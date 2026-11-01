@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   cableDeviceOwners,
+  cableMismatch,
   cablePower,
   cableDeviceIds,
   idsToToggle,
+  newFoundCables,
   useCablePanel,
   useCables,
   type Cable,
@@ -86,6 +88,7 @@ function CableRow({ cable, onEdit, onDelete }: { cable: Cable; onEdit: () => voi
     { caption: "cable_in", d: describeDevice(cable.render, "render", devices, loaded) },
     { caption: "cable_out", d: describeDevice(cable.capture, "capture", devices, loaded) },
   ];
+  const mismatch = cableMismatch(cable, devices);
 
   return (
     <div className="ag-panel__row">
@@ -101,6 +104,7 @@ function CableRow({ cable, onEdit, onDelete }: { cable: Cable; onEdit: () => voi
             {d.disabled && t("device_disabled_suffix")}
           </span>
         ))}
+        {mismatch && <span className="ag-cables__warning">{t(mismatch.code, mismatch.vars)}</span>}
       </button>
       <PowerSwitch cable={cable} />
       <button className="ag-panel__action" title={t("cable_setup")} onClick={onEdit}>
@@ -208,12 +212,27 @@ export function CableMenu() {
   const editing = useCablePanel((s) => s.editing);
   const { show, hide, edit } = useCablePanel.getState();
   const [confirming, setConfirming] = useState<string | null>(null);
+  // the result of the last cable search: names of the added cables, null before a search
+  const [found, setFound] = useState<string[] | null>(null);
+  const [searching, setSearching] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const t = useT();
+  const findCables = async () => {
+    setSearching(true);
+    try {
+      await useDevices.getState().refresh();
+      const added = newFoundCables(useCables.getState().cables, useDevices.getState().devices);
+      for (const cable of added) await create(cable.name, cable.sides);
+      setFound(added.map((c) => c.name));
+    } finally {
+      setSearching(false);
+    }
+  };
 
   useEffect(() => {
     if (!open) {
       setConfirming(null);
+      setFound(null);
       return;
     }
     const onDown = (e: PointerEvent) => {
@@ -288,7 +307,7 @@ export function CableMenu() {
               ),
             )}
           </div>
-          <div className="ag-panel__footer">
+          <div className="ag-panel__footer is-column">
             <button
               className="ag-panel__add"
               onClick={async () => {
@@ -299,6 +318,15 @@ export function CableMenu() {
               <Icon name="plus" />
               {t("new_cable")}
             </button>
+            <button className="ag-panel__add" disabled={searching} title={t("find_cables_hint")} onClick={findCables}>
+              <Icon name="search" />
+              {t("find_cables")}
+            </button>
+            {found && (
+              <div className="ag-cables__found">
+                {found.length > 0 ? t("cables_found", { names: found.join(", ") }) : t("cables_found_none")}
+              </div>
+            )}
           </div>
         </div>
       )}

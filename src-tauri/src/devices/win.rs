@@ -1,32 +1,61 @@
 //! Devices through Windows Core Audio (MMDevice API) and the undocumented IPolicyConfig.
 
+use super::pairs::{self, Endpoint};
 use super::{AudioDevice, DeviceState, Flow};
 use crate::com::{take_string, wide, ComGuard};
-use windows::core::{Result, PCWSTR};
+use windows::core::{Result, GUID, PCWSTR};
 use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
-use windows::Win32::Foundation::E_ACCESSDENIED;
+use windows::Win32::Foundation::{E_ACCESSDENIED, PROPERTYKEY};
 use windows::Win32::Media::Audio::{
     eCapture, eConsole, eRender, EDataFlow, ERole, IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, DEVICE_STATE,
     DEVICE_STATE_ACTIVE, DEVICE_STATE_DISABLED,
 };
 use windows::Win32::System::Com::StructuredStorage::{PropVariantClear, PropVariantToStringAlloc};
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL, STGM_READ};
+use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
 
 fn device_id(device: &IMMDevice) -> Result<String> {
     unsafe { Ok(take_string(device.GetId()?).unwrap_or_default()) }
 }
 
-fn friendly_name(device: &IMMDevice) -> Option<String> {
+const fn key(guid: u128, pid: u32) -> PROPERTYKEY {
+    PROPERTYKEY { fmtid: GUID::from_u128(guid), pid }
+}
+
+/// The device's own name without the driver name: "Line 1" (PKEY_Device_DeviceDesc)
+const PKEY_DEVICE_DESC: PROPERTYKEY = key(0xa45c254e_df1c_4efd_8020_67d146a850e0, 2);
+/// The bus of the driver device: "ROOT", "USB" (PKEY_Device_EnumeratorName)
+const PKEY_ENUMERATOR: PROPERTYKEY = key(0xa45c254e_df1c_4efd_8020_67d146a850e0, 24);
+/// The driver device the endpoint belongs to: "{1}.ROOT\{83ED7F0E-...}\0000"
+const PKEY_DRIVER_DEVICE: PROPERTYKEY = key(0xb3f8fa53_0004_438e_9003_51a46e139bfc, 2);
+/// The driver filter the endpoint is connected to: "{2}.\\?\root#...#{...}\wave1_r_rt"
+const PKEY_FILTER: PROPERTYKEY = key(0x233164c8_1b2c_4c7d_bc68_b671687a2567, 1);
+
+fn string_property(store: &IPropertyStore, key: &PROPERTYKEY) -> Option<String> {
     unsafe {
-        let store = device.OpenPropertyStore(STGM_READ).ok()?;
-        let mut value = store.GetValue(&PKEY_Device_FriendlyName).ok()?;
-        let name = PropVariantToStringAlloc(&value).ok().and_then(|p| take_string(p));
+        let mut value = store.GetValue(key).ok()?;
+        let text = PropVariantToStringAlloc(&value).ok().and_then(|p| take_string(p));
         let _ = PropVariantClear(&mut value);
-        name
+        text.filter(|s| !s.is_empty())
     }
 }
 
-fn list_flow(enumerator: &IMMDeviceEnumerator, flow: EDataFlow, kind: Flow) -> Result<Vec<AudioDevice>> {
+/// What the driver tells about the device, to find the other side of a virtual cable
+fn endpoint(store: &IPropertyStore, id: &str, render: bool) -> Endpoint {
+    let get = |key| string_property(store, key).unwrap_or_default();
+    // the values start with a "{n}." type mark
+    let unmark = |s: String| s.split_once("}.").map_or_else(|| s.clone(), |(_, rest)| rest.to_string());
+    Endpoint {
+        id: id.to_string(),
+        render,
+        name: get(&PKEY_DEVICE_DESC),
+        driver: unmark(get(&PKEY_DRIVER_DEVICE)),
+        enumerator: get(&PKEY_ENUMERATOR),
+        filter: get(&PKEY_FILTER).rsplit('\\').next().unwrap_or_default().to_string(),
+    }
+}
+
+fn list_flow(enumerator: &IMMDeviceEnumerator, flow: EDataFlow, kind: Flow) -> Result<Vec<(AudioDevice, Endpoint)>> {
     unsafe {
         // there may be no default device at all (for example, no microphone)
         let default_id = enumerator
@@ -46,14 +75,24 @@ fn list_flow(enumerator: &IMMDeviceEnumerator, flow: EDataFlow, kind: Flow) -> R
             } else {
                 DeviceState::Disabled
             };
-            devices.push(AudioDevice {
-                name: friendly_name(&device).unwrap_or_else(|| tr!("device_unnamed")),
-                is_default: default_id.as_deref() == Some(id.as_str()),
-                is_virtual: false,
-                flow: kind,
-                state,
-                id,
-            });
+            let store = device.OpenPropertyStore(STGM_READ).ok();
+            let endpoint = store.as_ref().map_or_else(Endpoint::default, |s| endpoint(s, &id, kind == Flow::Render));
+            devices.push((
+                AudioDevice {
+                    name: store
+                        .as_ref()
+                        .and_then(|s| string_property(s, &PKEY_Device_FriendlyName))
+                        .unwrap_or_else(|| tr!("device_unnamed")),
+                    is_default: default_id.as_deref() == Some(id.as_str()),
+                    is_virtual: false,
+                    pair: None,
+                    pair_name: None,
+                    flow: kind,
+                    state,
+                    id,
+                },
+                endpoint,
+            ));
         }
         Ok(devices)
     }
@@ -74,8 +113,16 @@ pub fn default_id(flow: EDataFlow, role: ERole) -> Option<String> {
 pub fn list() -> Result<Vec<AudioDevice>> {
     let _com = ComGuard::init();
     let enumerator: IMMDeviceEnumerator = unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)? };
-    let mut devices = list_flow(&enumerator, eRender, Flow::Render)?;
-    devices.extend(list_flow(&enumerator, eCapture, Flow::Capture)?);
+    let mut listed = list_flow(&enumerator, eRender, Flow::Render)?;
+    listed.extend(list_flow(&enumerator, eCapture, Flow::Capture)?);
+    let (mut devices, endpoints): (Vec<AudioDevice>, Vec<Endpoint>) = listed.into_iter().unzip();
+    for pair in pairs::find(&endpoints) {
+        for d in devices.iter_mut() {
+            let other = if d.id == pair.render { &pair.capture } else if d.id == pair.capture { &pair.render } else { continue };
+            d.pair = Some(other.clone());
+            d.pair_name = Some(pair.name.clone());
+        }
+    }
     Ok(devices)
 }
 

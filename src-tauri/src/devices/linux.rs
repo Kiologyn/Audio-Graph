@@ -18,6 +18,9 @@ pub fn list() -> Result<Vec<AudioDevice>, String> {
             devices.push(AudioDevice {
                 is_default: default.as_deref() == Some(d.name.as_str()),
                 is_virtual: d.name.starts_with(VIRTUAL_PREFIX),
+                // cables on Linux are the graph's own devices, not a driver's pairs
+                pair: None,
+                pair_name: None,
                 name: if d.description.is_empty() { d.name.clone() } else { d.description },
                 id: d.name,
                 flow,

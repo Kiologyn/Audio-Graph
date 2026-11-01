@@ -20,6 +20,7 @@ const uiPaths = {
   trash: "M4 7h16M10 11v6M14 11v6M6 7l1 12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-12M9 7V4h6v3",
   plus: "M12 5v14M5 12h14",
   check: "m5 12 5 5 9-10",
+  search: "M10.5 4a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13ZM15.5 15.5 20 20",
   // two nodes joined by an edge
   graph: "M3 3h6v6H3ZM15 15h6v6h-6ZM9 6h4a5 5 0 0 1 5 5v4",
   play: "M7 5v14l11-7Z",

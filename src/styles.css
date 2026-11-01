@@ -22,6 +22,8 @@
   --ag-cable: #d48a10;
   --ag-system: #5f6b7d;
   --ag-danger: #d64545;
+  /* something works but probably not as meant */
+  --ag-warning: #b86e00;
 }
 
 :root[data-theme="dark"] {
@@ -43,6 +45,7 @@
   --ag-cable: #f5b544;
   --ag-system: #a3adbd;
   --ag-danger: #ff6b6b;
+  --ag-warning: #f0a830;
 }
 
 * {
@@ -575,6 +578,16 @@ button {
   background: var(--ag-surface-2);
 }
 
+.ag-panel__add:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.ag-panel__footer.is-column {
+  flex-direction: column;
+  gap: 0;
+}
+
 /* ---------- cable panel ---------- */
 
 .ag-cables__panel {
@@ -624,6 +637,21 @@ button {
 
 .ag-cables__side.is-missing {
   color: var(--ag-danger);
+}
+
+/* the sides are from different virtual cables */
+.ag-cables__warning {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--ag-warning);
+}
+
+/* the result of the cable search */
+.ag-cables__found {
+  padding: 4px 8px 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--ag-text-dim);
 }
 
 /* a cable expanded for setup */
@@ -949,6 +977,10 @@ button {
 
 .ag-node__note.is-error {
   color: var(--ag-danger);
+}
+
+.ag-node__note.is-warning {
+  color: var(--ag-warning);
 }
 
 /* ---------- device choice on a node ---------- */

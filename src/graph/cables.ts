@@ -22,7 +22,8 @@ type CablesState = {
   loaded: boolean;
   error: string | null;
   load: () => Promise<void>;
-  create: () => Promise<string>;
+  /** A new cable: by default named "Cable" without devices */
+  create: (name?: string, sides?: Pick<Cable, "render" | "capture">) => Promise<string>;
   update: (id: string, patch: Partial<Pick<Cable, "name" | "render" | "capture">>) => void;
   remove: (id: string) => void;
 };
@@ -52,14 +53,15 @@ export const useCables = create<CablesState>()((set, get) => ({
       set({ cables, loaded: true });
     }),
 
-  create: async () => {
-    const name = uniqueName(t("node_cable"), get().cables.map((c) => c.name));
+  create: async (base = t("node_cable"), sides) => {
+    const name = uniqueName(base, get().cables.map((c) => c.name));
     let id = "";
     await enqueue(async () => {
       const cable = await invoke<Cable>("cable_create", { name });
       set((s) => ({ cables: [...s.cables, cable] }));
       id = cable.id;
     });
+    if (id && sides) get().update(id, sides);
     return id;
   },
 
@@ -103,6 +105,47 @@ export function cableDeviceIds(cable: Cable): string[] {
 /** Device → name of the cable it belongs to */
 export function cableDeviceOwners(cables: Cable[]): Map<string, string> {
   return new Map(cables.flatMap((c) => cableDeviceIds(c).map((id) => [id, c.name] as const)));
+}
+
+/**
+ * Virtual cables found by driver properties that aren't in the list yet: an output device
+ * and the recording device its driver pairs with it. A cable with exactly these two devices counts as present.
+ */
+export function newFoundCables(cables: Cable[], devices: AudioDevice[]): { name: string; sides: Pick<Cable, "render" | "capture"> }[] {
+  const present = new Set(cables.map((c) => `${c.render?.type === "device" ? c.render.id : ""}|${c.capture?.type === "device" ? c.capture.id : ""}`));
+  return devices.flatMap((render) => {
+    const capture = render.flow === "render" && devices.find((d) => d.flow === "capture" && d.id === render.pair);
+    if (!capture || present.has(`${render.id}|${capture.id}`)) return [];
+    return [
+      {
+        name: render.pairName ?? render.name,
+        sides: {
+          render: { type: "device", id: render.id, name: render.name },
+          capture: { type: "device", id: capture.id, name: capture.name },
+        },
+      },
+    ];
+  });
+}
+
+/**
+ * The cable's sides are from different virtual cables: its chosen device is paired by the driver
+ * with another one. An empty side isn't a mismatch. Returns the warning: a string code and its values.
+ */
+export function cableMismatch(cable: Cable, devices: AudioDevice[]): { code: string; vars: Record<string, string> } | null {
+  const [renderId, captureId] = [cable.render, cable.capture].map((d) => (d?.type === "device" ? d.id : null));
+  if (!renderId || !captureId) return null;
+  const render = devices.find((d) => d.flow === "render" && d.id === renderId);
+  const capture = devices.find((d) => d.flow === "capture" && d.id === captureId);
+  for (const [device, other, chosen, code] of [
+    [render, "capture", captureId, "cable_output_mismatch"],
+    [capture, "render", renderId, "cable_input_mismatch"],
+  ] as const) {
+    if (!device?.pair || device.pair === chosen) continue;
+    const pair = devices.find((d) => d.flow === other && d.id === device.pair);
+    if (pair) return { code, vars: { device: device.name, pair: pair.name } };
+  }
+  return null;
 }
 
 /** The cable is on, off or partly on; none means the system has none of its devices, nothing to switch */

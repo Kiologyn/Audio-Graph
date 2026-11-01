@@ -6,6 +6,8 @@ use serde::Serialize;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(windows)]
+mod pairs;
+#[cfg(windows)]
 pub(crate) mod win;
 
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,6 +40,10 @@ pub struct AudioDevice {
     pub is_default: bool,
     /// A cable device the graph created itself (Linux): nodes don't choose it
     pub is_virtual: bool,
+    /// The other side of the virtual cable this device belongs to, found by driver properties (Windows)
+    pub pair: Option<String>,
+    /// The name of that cable: "Line 1"
+    pub pair_name: Option<String>,
 }
 
 /// Enabled and disabled output and input devices
@@ -104,6 +110,9 @@ mod tests {
         println!("{} devices in {:?}", devices.len(), started.elapsed());
         for d in &devices {
             println!("{:?} {:?}{} {}  [{}]", d.flow, d.state, if d.is_default { " *" } else { "" }, d.name, d.id);
+            if let Some(pair) = &d.pair {
+                println!("    cable {:?} with {pair}", d.pair_name.as_deref().unwrap_or_default());
+            }
         }
     }
 

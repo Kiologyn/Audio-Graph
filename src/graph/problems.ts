@@ -1,12 +1,15 @@
 import { t } from "../i18n";
 import { dynamicCables, virtualDeviceIds } from "../platform";
-import { cableDeviceIds, type Cable } from "./cables";
+import { cableDeviceIds, cableMismatch, type Cable } from "./cables";
 import type { AudioDevice } from "./devices";
 import type { AppStatus, EngineStatus } from "./engine";
 import type { AudioNode, AudioNodeData, DeviceRef } from "./types";
 
-/** A note on a node: error means something doesn't work, info means it waits (app not running) */
-export type Note = { text: string; level: "error" | "info" };
+/**
+ * A note on a node: error means something doesn't work, warning means it works but probably
+ * not as meant, info means it waits (app not running)
+ */
+export type Note = { text: string; level: "error" | "warning" | "info" };
 
 /** A row of the problem list in the header */
 export type Problem = Note & { key: string; who: string | null };
@@ -49,8 +52,12 @@ export function nodeNotes(
   cables: Cable[],
   devices: AudioDevice[],
 ): { notes: Note[]; flagged: boolean } {
-  if (!graphId || status.graphId !== graphId) return { notes: [], flagged: false };
   const notes: Note[] = [];
+  // a cable's sides from different virtual cables: shown even when the graph isn't running
+  const cable = data.kind === "cable" && cables.find((c) => c.id === data.cable);
+  const mismatch = cable && cableMismatch(cable, devices);
+  if (mismatch) notes.push({ text: t(mismatch.code, mismatch.vars), level: "warning" });
+  if (!graphId || status.graphId !== graphId) return { notes, flagged: false };
   let flagged = false;
   for (const issue of status.issues) {
     if (!issue.nodes.includes(id)) continue;

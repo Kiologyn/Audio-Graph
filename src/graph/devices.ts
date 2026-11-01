@@ -13,6 +13,10 @@ export type AudioDevice = {
   isDefault: boolean;
   /** A cable device the graph created itself (Linux): nodes don't choose it */
   isVirtual: boolean;
+  /** The other side of the virtual cable this device belongs to, found by driver properties (Windows) */
+  pair: string | null;
+  /** The name of that cable: "Line 1" */
+  pairName: string | null;
 };
 
 /**
