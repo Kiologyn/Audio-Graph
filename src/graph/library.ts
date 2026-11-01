@@ -136,11 +136,12 @@ let initOnce: Promise<void> | null = null;
 import.meta.hot?.accept(() => location.reload());
 
 export const useLibrary = create<LibraryState>()((set, get) => {
-  async function createFrom(name: string, nodes: AudioNode[], edges: AudioEdge[]): Promise<string> {
+  /** showDelay: delay sliders on (the ready-made graphs of a first start); other graphs start without them */
+  async function createFrom(name: string, nodes: AudioNode[], edges: AudioEdge[], showDelay = false): Promise<string> {
     await flushSave();
     // a new graph's volume checkbox is as set in the settings
     const showVolume = useSettings.getState().newGraphVolume;
-    const doc = await graphsApi.create(name, nodesToDoc(nodes), edgesToDoc(edges), showVolume);
+    const doc = await graphsApi.create(name, nodesToDoc(nodes), edgesToDoc(edges), showVolume, showDelay);
     set((s) => ({ graphs: [...s.graphs, metaOf(doc)] }));
     useGraph.getState().loadDoc(doc);
     markLoaded();
@@ -178,7 +179,8 @@ export const useLibrary = create<LibraryState>()((set, get) => {
           } else {
             // first start: ready-made graphs, the first one open
             const ids = [];
-            for (const g of starterGraphs()) ids.push(await createFrom(g.name, g.nodes, g.edges));
+            // a new user sees the delay sliders right away, with the default range of ±0.5 s
+            for (const g of starterGraphs()) ids.push(await createFrom(g.name, g.nodes, g.edges, true));
             await get().open(ids[0]);
           }
         } else {

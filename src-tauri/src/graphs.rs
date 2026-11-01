@@ -298,6 +298,7 @@ pub fn graph_create(
     nodes: Vec<GraphNode>,
     edges: Vec<GraphEdge>,
     show_volume: Option<bool>,
+    show_delay: Option<bool>,
 ) -> CmdResult<Graph> {
     let _guard = store.lock.lock().map_err(err)?;
     let now = now_ms();
@@ -311,7 +312,7 @@ pub fn graph_create(
         nodes,
         edges,
         show_volume: show_volume.unwrap_or(true),
-        show_delay: false,
+        show_delay: show_delay.unwrap_or(false),
         delay_limit: half_second(),
     };
     store.write(&graph)?;
