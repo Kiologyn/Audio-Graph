@@ -26,6 +26,8 @@ type CablesState = {
   create: (name?: string, sides?: Pick<Cable, "render" | "capture">) => Promise<string>;
   update: (id: string, patch: Partial<Pick<Cable, "name" | "render" | "capture">>) => void;
   remove: (id: string) => void;
+  /** Puts the list in this order of cable ids */
+  reorder: (ids: string[]) => void;
 };
 
 // Changes apply in the interface at once and go to disk strictly in order:
@@ -76,6 +78,12 @@ export const useCables = create<CablesState>()((set, get) => ({
   remove: (id) => {
     set((s) => ({ cables: s.cables.filter((c) => c.id !== id) }));
     enqueue(() => invoke("cable_delete", { id }));
+  },
+
+  reorder: (ids) => {
+    const byId = new Map(get().cables.map((c) => [c.id, c]));
+    set({ cables: ids.flatMap((id) => byId.get(id) ?? []) });
+    enqueue(() => invoke("cables_reorder", { ids }));
   },
 }));
 

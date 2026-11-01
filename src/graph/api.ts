@@ -12,4 +12,5 @@ export const graphsApi = {
   rename: (id: string, name: string) => invoke<GraphMeta>("graph_rename", { id, name }),
   setShowVolume: (id: string, show: boolean) => invoke<GraphMeta>("graph_set_show_volume", { id, show }),
   remove: (id: string) => invoke<void>("graph_delete", { id }),
+  reorder: (ids: string[]) => invoke<void>("graphs_reorder", { ids }),
 };

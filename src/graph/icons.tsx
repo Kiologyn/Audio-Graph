@@ -21,6 +21,8 @@ const uiPaths = {
   plus: "M12 5v14M5 12h14",
   check: "m5 12 5 5 9-10",
   search: "M10.5 4a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13ZM15.5 15.5 20 20",
+  // six dots: a handle to drag a row by
+  grip: "M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01",
   // two nodes joined by an edge
   graph: "M3 3h6v6H3ZM15 15h6v6h-6ZM9 6h4a5 5 0 0 1 5 5v4",
   play: "M7 5v14l11-7Z",

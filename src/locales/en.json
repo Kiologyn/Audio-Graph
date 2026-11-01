@@ -35,6 +35,7 @@
   "start": "Start",
   "add_node": "Add node",
   "delete": "Delete",
+  "drag_to_reorder": "Drag to reorder",
   "graphs": "Graphs",
   "new_graph": "New graph",
   "save": "Save",

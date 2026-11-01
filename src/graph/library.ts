@@ -21,6 +21,8 @@ type LibraryState = {
   rename: (id: string, name: string) => Promise<void>;
   setShowVolume: (id: string, show: boolean) => Promise<void>;
   remove: (id: string) => Promise<void>;
+  /** Puts the list in this order of graph ids */
+  reorder: (ids: string[]) => Promise<void>;
 };
 
 /** Pause after the last change before writing to disk */
@@ -212,6 +214,13 @@ export const useLibrary = create<LibraryState>()((set, get) => {
         // autosave saves the open graph, the others go through a separate command
         if (useGraph.getState().meta?.id === id) useGraph.getState().setShowVolume(show);
         else await graphsApi.setShowVolume(id, show);
+      }),
+
+    reorder: (ids) =>
+      guard(async () => {
+        const byId = new Map(get().graphs.map((g) => [g.id, g]));
+        set({ graphs: ids.flatMap((id) => byId.get(id) ?? []) });
+        await graphsApi.reorder(ids);
       }),
 
     remove: (id) =>

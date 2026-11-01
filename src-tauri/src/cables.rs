@@ -129,6 +129,17 @@ pub fn cable_update(store: State<CableStore>, engine: State<Engine>, cable: Cabl
     Ok(updated)
 }
 
+/// Puts the cables in the order of the ids; cables missing from the list keep their order at the end
+#[tauri::command]
+pub fn cables_reorder(store: State<CableStore>, engine: State<Engine>, ids: Vec<String>) -> CmdResult<()> {
+    let _guard = store.lock.lock().map_err(err)?;
+    let mut cables = store.read()?;
+    let place = |id: &str| ids.iter().position(|o| o == id).unwrap_or(usize::MAX);
+    // the sort is stable: cables not in the list stay in their order
+    cables.sort_by_key(|c| place(&c.id));
+    store.write(cables, &engine)
+}
+
 #[tauri::command]
 pub fn cable_delete(store: State<CableStore>, engine: State<Engine>, id: String) -> CmdResult<()> {
     let _guard = store.lock.lock().map_err(err)?;

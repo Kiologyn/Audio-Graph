@@ -148,6 +148,9 @@ impl From<&Graph> for GraphMeta {
 struct Settings {
     #[serde(default)]
     last_opened: Option<String>,
+    /// Graph ids in the order of the list, as the user arranged it; graphs not in it go last
+    #[serde(default)]
+    graph_order: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -224,9 +227,21 @@ impl GraphStore {
                 Err(e) => eprintln!("skipped graph file {}: {e}", path.display()),
             }
         }
-        graphs.sort_by_key(|g| g.created_at);
+        let order = self.settings().graph_order;
+        let place = |id: &str| order.iter().position(|o| o == id).unwrap_or(usize::MAX);
+        graphs.sort_by_key(|g| (place(&g.id), g.created_at));
         Ok(graphs)
     }
+}
+
+/// Remembers the order of the graph list
+#[tauri::command]
+pub fn graphs_reorder(store: State<GraphStore>, ids: Vec<String>) -> CmdResult<()> {
+    let _guard = store.lock.lock().map_err(err)?;
+    let mut s = store.settings();
+    s.graph_order = ids;
+    let json = serde_json::to_vec_pretty(&s).map_err(err)?;
+    write_atomic(&store.settings_path, &json).map_err(err)
 }
 
 #[tauri::command]

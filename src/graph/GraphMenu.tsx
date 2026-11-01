@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useT } from "../i18n";
 import type { GraphMeta } from "./doc";
 import { useEngine } from "./engine";
 import { Icon } from "./icons";
 import { useLibrary } from "./library";
+import { useSortable } from "./sortable";
 import { useGraph } from "./store";
 
 type RowMode = "view" | "edit" | "confirm";
@@ -14,12 +15,15 @@ function GraphRow({
   mode,
   setMode,
   onOpen,
+  grip,
 }: {
   graph: GraphMeta;
   current: boolean;
   mode: RowMode;
   setMode: (mode: RowMode) => void;
   onOpen: () => void;
+  /** The handle to drag the row by */
+  grip: ReactNode;
 }) {
   const rename = useLibrary((s) => s.rename);
   const remove = useLibrary((s) => s.remove);
@@ -79,6 +83,7 @@ function GraphRow({
 
   return (
     <div className={`ag-panel__row${current ? " is-current" : ""}`}>
+      {grip}
       <RunState id={graph.id} />
       <button className="ag-panel__name" onClick={onOpen} onDoubleClick={() => setMode("edit")} title={graph.name}>
         {graph.name}
@@ -145,6 +150,7 @@ export function GraphMenu() {
   const graphs = useLibrary((s) => s.graphs);
   const open = useLibrary((s) => s.open);
   const create = useLibrary((s) => s.create);
+  const reorder = useLibrary((s) => s.reorder);
   const current = useGraph((s) => s.meta);
   const runningCount = useEngine((s) => s.status.running.length);
   const [isOpen, setOpen] = useState(false);
@@ -152,6 +158,10 @@ export function GraphMenu() {
   const [active, setActive] = useState<{ id: string; mode: RowMode } | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const t = useT();
+  const sortable = useSortable(
+    graphs.map((g) => g.id),
+    reorder,
+  );
 
   const close = () => {
     setOpen(false);
@@ -196,16 +206,27 @@ export function GraphMenu() {
 
       {isOpen && (
         <div className="ag-panel">
-          <div className="ag-panel__list">
+          <div className={`ag-panel__list${sortable.dragging ? " is-sorting" : ""}`}>
             {graphs.map((g) => (
-              <GraphRow
+              <div
                 key={g.id}
-                graph={g}
-                current={g.id === current?.id}
-                mode={active?.id === g.id ? active.mode : "view"}
-                setMode={(mode) => setActive(mode === "view" ? null : { id: g.id, mode })}
-                onOpen={() => open(g.id)}
-              />
+                ref={sortable.row(g.id)}
+                className={`ag-sortable${sortable.dragging === g.id ? " is-dragging" : ""}`}
+                style={sortable.style(g.id)}
+              >
+                <GraphRow
+                  graph={g}
+                  current={g.id === current?.id}
+                  mode={active?.id === g.id ? active.mode : "view"}
+                  setMode={(mode) => setActive(mode === "view" ? null : { id: g.id, mode })}
+                  onOpen={() => open(g.id)}
+                  grip={
+                    <span className="ag-panel__grip" title={t("drag_to_reorder")} {...sortable.handle(g.id)}>
+                      <Icon name="grip" />
+                    </span>
+                  }
+                />
+              </div>
             ))}
           </div>
           <div className="ag-panel__footer">

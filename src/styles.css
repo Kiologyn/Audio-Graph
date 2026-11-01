@@ -401,6 +401,52 @@ button {
   background: var(--ag-surface-2);
 }
 
+/* a list row that can be dragged to another place (sortable.ts) */
+.ag-sortable {
+  /* the row's own margins stay inside: its height is how far the others move */
+  display: flow-root;
+  position: relative;
+}
+
+.ag-panel__list.is-sorting .ag-sortable {
+  transition: transform 150ms ease;
+}
+
+.ag-panel__list.is-sorting .ag-sortable.is-dragging {
+  z-index: 1;
+  transition: none;
+  border-radius: 5px;
+  background: var(--ag-surface-2);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.25);
+}
+
+.ag-panel__list.is-sorting,
+.ag-panel__list.is-sorting * {
+  cursor: grabbing;
+  user-select: none;
+}
+
+/* the handle to drag a row by */
+.ag-panel__grip {
+  display: inline-flex;
+  align-items: center;
+  align-self: stretch;
+  padding: 0 2px 0 4px;
+  color: var(--ag-text-dim);
+  opacity: 0.75;
+  cursor: grab;
+  touch-action: none;
+}
+
+/* the dots are slightly bigger than a line of the same icon set */
+.ag-panel__grip svg {
+  stroke-width: 2.6;
+}
+
+.ag-panel__row:hover .ag-panel__grip {
+  opacity: 1;
+}
+
 .ag-panel__name {
   flex: 1;
   min-width: 0;

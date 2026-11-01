@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   cableDeviceOwners,
   cableMismatch,
@@ -14,6 +14,7 @@ import { useT } from "../i18n";
 import { describeDevice, useDevices } from "./devices";
 import { DevicePicker } from "./DevicePicker";
 import { Icon, KindIcon } from "./icons";
+import { useSortable } from "./sortable";
 import type { DeviceSlot } from "./types";
 
 const CABLE_SLOT: DeviceSlot = { placeholder: "cable_slot_not_selected", allowDefault: false };
@@ -80,7 +81,18 @@ function BulkPower({ cables }: { cables: Cable[] }) {
   );
 }
 
-function CableRow({ cable, onEdit, onDelete }: { cable: Cable; onEdit: () => void; onDelete: () => void }) {
+function CableRow({
+  cable,
+  onEdit,
+  onDelete,
+  grip,
+}: {
+  cable: Cable;
+  onEdit: () => void;
+  onDelete: () => void;
+  /** The handle to drag the row by */
+  grip: ReactNode;
+}) {
   const devices = useDevices((s) => s.devices);
   const loaded = useDevices((s) => s.loaded);
   const t = useT();
@@ -92,6 +104,7 @@ function CableRow({ cable, onEdit, onDelete }: { cable: Cable; onEdit: () => voi
 
   return (
     <div className="ag-panel__row">
+      {grip}
       <button className="ag-cables__info" onClick={onEdit} title={t("cable_setup_hint")}>
         <span className="ag-cables__name">{cable.name}</span>
         {sides.map(({ caption, d }) => (
@@ -208,6 +221,7 @@ export function CableMenu() {
   const cables = useCables((s) => s.cables);
   const create = useCables((s) => s.create);
   const remove = useCables((s) => s.remove);
+  const reorder = useCables((s) => s.reorder);
   const open = useCablePanel((s) => s.open);
   const editing = useCablePanel((s) => s.editing);
   const { show, hide, edit } = useCablePanel.getState();
@@ -217,6 +231,11 @@ export function CableMenu() {
   const [searching, setSearching] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const t = useT();
+  const sortable = useSortable(
+    cables.map((c) => c.id),
+    reorder,
+  );
+
   const findCables = async () => {
     setSearching(true);
     try {
@@ -267,7 +286,7 @@ export function CableMenu() {
       {open && (
         <div className="ag-panel ag-cables__panel">
           {cables.length > 0 && <BulkPower cables={cables} />}
-          <div className="ag-panel__list">
+          <div className={`ag-panel__list${sortable.dragging ? " is-sorting" : ""}`}>
             {cables.length === 0 && (
               <div className="ag-cables__empty">
                 {t(
@@ -275,37 +294,48 @@ export function CableMenu() {
                 )}
               </div>
             )}
-            {cables.map((c) =>
-              editing === c.id ? (
-                <CableEditor key={c.id} cable={c} onDone={() => edit(null)} />
-              ) : confirming === c.id ? (
-                <div key={c.id} className="ag-panel__row is-confirm">
-                  <span className="ag-panel__confirm-text">{t("delete_confirm", { name: c.name })}</span>
-                  <button
-                    className="ag-panel__small is-danger"
-                    onClick={() => {
-                      remove(c.id);
+            {cables.map((c) => (
+              <div
+                key={c.id}
+                ref={sortable.row(c.id)}
+                className={`ag-sortable${sortable.dragging === c.id ? " is-dragging" : ""}`}
+                style={sortable.style(c.id)}
+              >
+                {editing === c.id ? (
+                  <CableEditor cable={c} onDone={() => edit(null)} />
+                ) : confirming === c.id ? (
+                  <div className="ag-panel__row is-confirm">
+                    <span className="ag-panel__confirm-text">{t("delete_confirm", { name: c.name })}</span>
+                    <button
+                      className="ag-panel__small is-danger"
+                      onClick={() => {
+                        remove(c.id);
+                        setConfirming(null);
+                      }}
+                    >
+                      {t("delete")}
+                    </button>
+                    <button className="ag-panel__small" onClick={() => setConfirming(null)}>
+                      {t("cancel")}
+                    </button>
+                  </div>
+                ) : (
+                  <CableRow
+                    cable={c}
+                    onEdit={() => {
                       setConfirming(null);
+                      edit(c.id);
                     }}
-                  >
-                    {t("delete")}
-                  </button>
-                  <button className="ag-panel__small" onClick={() => setConfirming(null)}>
-                    {t("cancel")}
-                  </button>
-                </div>
-              ) : (
-                <CableRow
-                  key={c.id}
-                  cable={c}
-                  onEdit={() => {
-                    setConfirming(null);
-                    edit(c.id);
-                  }}
-                  onDelete={() => setConfirming(c.id)}
-                />
-              ),
-            )}
+                    onDelete={() => setConfirming(c.id)}
+                    grip={
+                      <span className="ag-panel__grip" title={t("drag_to_reorder")} {...sortable.handle(c.id)}>
+                        <Icon name="grip" />
+                      </span>
+                    }
+                  />
+                )}
+              </div>
+            ))}
           </div>
           <div className="ag-panel__footer is-column">
             <button

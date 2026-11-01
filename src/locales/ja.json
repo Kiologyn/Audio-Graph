@@ -35,6 +35,7 @@
   "start": "開始",
   "add_node": "ノードを追加",
   "delete": "削除",
+  "drag_to_reorder": "ドラッグして並べ替え",
   "graphs": "グラフ",
   "new_graph": "新しいグラフ",
   "save": "保存",
