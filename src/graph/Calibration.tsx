@@ -43,7 +43,7 @@ const quiet = (seconds: number) => invoke("engine_quiet", { seconds }).catch(() 
 
 /**
  * Delay calibration: every chosen output plays a short sweep in turn, a microphone hears it, and the
- * difference in latencies becomes the outputs' delays. The slowest output gets none, the others wait for it
+ * difference in latencies becomes the outputs' delays. The fastest output gets none, the late ones a negative one
  */
 export function Calibration() {
   const open = useCalibration((s) => s.open);
@@ -99,10 +99,11 @@ function CalibrationDialog({ onClose }: { onClose: () => void }) {
     });
 
   const measured = [...(rows ?? [])].flatMap(([id, row]) => (row.state === "done" ? [{ id, ...row.result }] : []));
-  const slowest = Math.max(...measured.map((m) => m.latency));
-  // the slowest output plays as it is, the others wait for it
-  const delays = new Map(measured.map((m) => [m.id, Math.round((slowest - m.latency) * 1000) / 1000]));
-  const needed = Math.max(0, ...delays.values());
+  const fastest = Math.min(...measured.map((m) => m.latency));
+  // the fastest output plays as it is, the late ones get ahead by as much as they lag:
+  // the engine turns negative delays into waiting on the other outputs
+  const delays = new Map(measured.map((m) => [m.id, Math.round((fastest - m.latency) * 1000) / 1000]));
+  const needed = Math.max(0, ...[...delays.values()].map((d) => -d));
   const limit = meta.delayLimit;
 
   const measure = async (ids: string[]) => {
@@ -140,7 +141,8 @@ function CalibrationDialog({ onClose }: { onClose: () => void }) {
       await quiet(5);
       const list = measured.flatMap((m) => {
         const sink = outputs.find((n) => n.id === m.id)?.data.sink;
-        return sink ? [{ device: sink, delay: delays.get(m.id) ?? 0 }] : [];
+        // ticks can only wait: the late outputs start first
+        return sink ? [{ device: sink, delay: (delays.get(m.id) ?? 0) + needed }] : [];
       });
       await invoke("calibrate_preview", { outputs: list });
     } catch (e) {
@@ -152,7 +154,7 @@ function CalibrationDialog({ onClose }: { onClose: () => void }) {
   };
 
   const apply = () => {
-    for (const [id, delay] of delays) setDelay(id, Math.min(delay, MAX_DELAY_LIMIT));
+    for (const [id, delay] of delays) setDelay(id, Math.max(delay, -MAX_DELAY_LIMIT));
     // the sliders must show the delays: turned on, the range wide enough
     const range = needed > limit ? Math.min(MAX_DELAY_LIMIT, Math.ceil(needed * 20) / 20) : limit;
     if (!meta.showDelay || range !== limit) setPrefs(meta.id, { showDelay: true, delayLimit: range });
