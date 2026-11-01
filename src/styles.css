@@ -546,6 +546,10 @@ button {
 }
 
 .ag-run__dot {
+  flex: none;
+  /* room for the halo: the state clips what overflows it */
+  margin: 3px;
+  margin-right: 0;
   width: 7px;
   height: 7px;
   border-radius: 50%;
