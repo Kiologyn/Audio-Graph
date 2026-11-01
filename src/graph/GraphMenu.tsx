@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useT } from "../i18n";
-import type { GraphMeta } from "./doc";
+import { MAX_DELAY_LIMIT, type GraphMeta } from "./doc";
 import { useEngine } from "./engine";
 import { Icon } from "./icons";
 import { useLibrary } from "./library";
+import { Popover } from "./Popover";
 import { useSortable } from "./sortable";
 import { useGraph } from "./store";
 
@@ -88,7 +89,7 @@ function GraphRow({
       <button className="ag-panel__name" onClick={onOpen} onDoubleClick={() => setMode("edit")} title={graph.name}>
         {graph.name}
       </button>
-      <VolumeToggle graph={graph} />
+      <GraphOptions graph={graph} />
       <RunToggle id={graph.id} />
       <button className="ag-panel__action" title={t("rename")} onClick={() => setMode("edit")}>
         <Icon name="pencil" />
@@ -114,19 +115,109 @@ function RunState({ id }: { id: string }) {
   );
 }
 
-/** The graph's checkbox: whether its nodes show volume sliders */
-function VolumeToggle({ graph }: { graph: GraphMeta }) {
-  const setShowVolume = useLibrary((s) => s.setShowVolume);
+/** A number of seconds: written freely, applied on Enter or leaving the field, kept within 0.001..max */
+function SecondsField({
+  value,
+  max,
+  disabled,
+  title,
+  onChange,
+}: {
+  value: number;
+  max: number;
+  disabled: boolean;
+  title: string;
+  onChange: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(String(value));
   const t = useT();
+  useEffect(() => setDraft(String(value)), [value]);
+  const commit = () => {
+    // a comma is a decimal separator too
+    const n = Number(draft.trim().replace(",", "."));
+    const next = Number.isFinite(n) && n > 0 ? Math.min(max, Math.max(0.001, Math.round(n * 1000) / 1000)) : value;
+    setDraft(String(next));
+    if (next !== value) onChange(next);
+  };
   return (
-    <label className="ag-graphs__volume" title={t("graph_volume_toggle")}>
+    <label className={`ag-graph-options__seconds${disabled ? " is-disabled" : ""}`} title={title}>
+      <span>±</span>
       <input
-        type="checkbox"
-        checked={graph.showVolume ?? true}
-        onChange={(e) => setShowVolume(graph.id, e.currentTarget.checked)}
+        type="text"
+        inputMode="decimal"
+        value={draft}
+        disabled={disabled}
+        onChange={(e) => setDraft(e.currentTarget.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit();
+          if (e.key === "Escape") {
+            // Escape cancels the edit instead of closing the menu
+            e.stopPropagation();
+            setDraft(String(value));
+          }
+        }}
       />
-      <Icon name="volume" />
+      <span>{t("seconds_short")}</span>
     </label>
+  );
+}
+
+/** The arrow in a graph's row: a menu with its volume and delay sliders and the delay range */
+function GraphOptions({ graph }: { graph: GraphMeta }) {
+  const setSliders = useLibrary((s) => s.setSliders);
+  const anchor = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  const t = useT();
+  const showDelay = graph.showDelay ?? false;
+  return (
+    <>
+      <button
+        ref={anchor}
+        className={`ag-panel__action ag-graphs__options${open ? " is-open" : ""}`}
+        title={t("graph_options")}
+        onClick={() => setOpen(!open)}
+      >
+        <Icon name="chevron" size={12} />
+      </button>
+      {open && (
+        <Popover anchor={anchor} onClose={() => setOpen(false)}>
+          <div className="ag-graph-options">
+            <label className="ag-graph-options__check">
+              <input
+                type="checkbox"
+                checked={graph.showVolume ?? true}
+                onChange={(e) => setSliders(graph.id, { showVolume: e.currentTarget.checked })}
+              />
+              <span>
+                {t("graph_volume_sliders")}
+                <small>{t("graph_volume_sliders_hint")}</small>
+              </span>
+            </label>
+            <div className="ag-graph-options__row">
+              <label className="ag-graph-options__check">
+                <input
+                  type="checkbox"
+                  checked={showDelay}
+                  onChange={(e) => setSliders(graph.id, { showDelay: e.currentTarget.checked })}
+                />
+                <span>
+                  {t("graph_delay_sliders")}
+                  <small>{t("graph_delay_sliders_hint")}</small>
+                </span>
+              </label>
+              <SecondsField
+                value={graph.delayLimit ?? 0.5}
+                max={MAX_DELAY_LIMIT}
+                disabled={!showDelay}
+                title={t("graph_delay_limit", { max: MAX_DELAY_LIMIT })}
+                onChange={(delayLimit) => setSliders(graph.id, { delayLimit })}
+              />
+            </div>
+          </div>
+        </Popover>
+      )}
+    </>
   );
 }
 
@@ -171,9 +262,13 @@ export function GraphMenu() {
   useEffect(() => {
     if (!isOpen) return;
     const onDown = (e: PointerEvent) => {
-      if (!root.current?.contains(e.target as Node)) close();
+      const target = e.target as Element;
+      // a graph's options menu is rendered apart from the panel but belongs to it
+      if (root.current?.contains(target) || target.closest?.(".ag-popover")) return;
+      close();
     };
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
+    // the first Escape closes an open options menu, only the next one closes the list
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && !document.querySelector(".ag-popover") && close();
     window.addEventListener("pointerdown", onDown);
     window.addEventListener("keydown", onKey);
     return () => {

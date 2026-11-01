@@ -139,10 +139,10 @@ pub struct Streams {
 impl Streams {
     /// Brings streams in line with the plan on the fly: new links are added, extra ones removed
     pub fn apply(&mut self, plan: &[Stream]) -> Vec<StreamStatus> {
-        // link → volume
-        let wanted: BTreeMap<(&str, &str), f32> = plan
+        // link → volume and delay
+        let wanted: BTreeMap<(&str, &str), (f32, f32)> = plan
             .iter()
-            .flat_map(|s| s.sources.iter().map(|src| ((src.device.as_str(), s.sink.as_str()), src.gain)))
+            .flat_map(|s| s.sources.iter().map(|src| ((src.device.as_str(), s.sink.as_str()), (src.gain, src.delay))))
             .collect();
 
         for (device, w) in &self.captures {
@@ -151,18 +151,21 @@ impl Streams {
         for (device, w) in &self.renders {
             let mut links = lock(&w.links);
             links.retain(|(source, _)| wanted.contains_key(&(source.as_str(), device.as_str())));
-            // volume changes on the fly without recreating the link
+            // volume and delay change on the fly without recreating the link
             for (source, reader) in links.iter() {
-                reader.set_gain(wanted[&(source.as_str(), device.as_str())]);
+                let (gain, delay) = wanted[&(source.as_str(), device.as_str())];
+                reader.set_gain(gain);
+                reader.set_delay(delay);
             }
         }
-        for (&(source, sink), &gain) in &wanted {
+        for (&(source, sink), &(gain, delay)) in &wanted {
             let capture = self.captures.entry(source.to_string()).or_insert_with(Worker::new);
             if lock(&capture.links).iter().any(|(s, _)| s == sink) {
                 continue;
             }
             let (producer, reader) = link();
             reader.set_gain(gain);
+            reader.set_delay(delay);
             lock(&capture.links).push((sink.to_string(), producer));
             let render = self.renders.entry(sink.to_string()).or_insert_with(Worker::new);
             lock(&render.links).push((source.to_string(), reader));
@@ -367,7 +370,19 @@ mod tests {
     #[test]
     #[ignore]
     fn vac_loopback() {
-        tone_through(&vac(Flow::Render), &vac(Flow::Capture));
+        tone_through(&vac(Flow::Render), &vac(Flow::Capture), 0.0);
+    }
+
+    /// The same with an output delay of 300 ms: the tone comes that much later
+    /// cargo test vac_delayed -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn vac_delayed() {
+        let plain = tone_through(&vac(Flow::Render), &vac(Flow::Capture), 0.0);
+        let delayed = tone_through(&vac(Flow::Render), &vac(Flow::Capture), 0.3);
+        let extra = delayed.as_secs_f32() - plain.as_secs_f32();
+        println!("the delay added {:.0} ms", extra * 1000.0);
+        assert!((extra - 0.3).abs() < 0.03, "{extra}");
     }
 
     /// The same, but listens to the VAC input itself through WASAPI loopback, as for a cable without an output:
@@ -376,11 +391,11 @@ mod tests {
     #[ignore]
     fn vac_input_loopback() {
         let render_id = vac(Flow::Render);
-        tone_through(&render_id, &format!("{LOOPBACK_PREFIX}{render_id}"));
+        tone_through(&render_id, &format!("{LOOPBACK_PREFIX}{render_id}"), 0.0);
     }
 
-    fn tone_through(render_id: &str, capture_id: &str) {
-
+    /// Plays a tone through a link with the delay; returns when it was heard
+    fn tone_through(render_id: &str, capture_id: &str, delay: f32) -> Duration {
         let mut capture = Worker::<Producer>::new();
         let (heard_in, heard) = ring(RATE * CHANNELS);
         lock(&capture.links).push(("test".into(), heard_in));
@@ -388,6 +403,7 @@ mod tests {
 
         let mut render = Worker::<LinkReader>::new();
         let (tone, reader) = link();
+        reader.set_delay(delay);
         lock(&render.links).push(("test".into(), reader));
         render.supervise(render_id, render_thread);
         std::thread::sleep(Duration::from_millis(300));
@@ -397,7 +413,8 @@ mod tests {
         let started = Instant::now();
         let (mut phase, mut onset, mut energy, mut count) = (0usize, None, 0.0f64, 0usize);
         let mut buf = vec![0.0f32; RATE * CHANNELS];
-        while started.elapsed() < Duration::from_millis(1500) {
+        let delay = Duration::from_secs_f32(delay);
+        while started.elapsed() < Duration::from_millis(1500) + delay {
             let packet: Vec<f32> = (0..480)
                 .flat_map(|i| {
                     let s = 0.5 * (2.0 * std::f32::consts::PI * 440.0 * (phase + i) as f32 / RATE as f32).sin();
@@ -412,7 +429,7 @@ mod tests {
             if onset.is_none() && buf[..n].iter().any(|s| s.abs() > 0.05) {
                 onset = Some(started.elapsed());
             }
-            if started.elapsed() > Duration::from_millis(700) {
+            if started.elapsed() > Duration::from_millis(700) + delay {
                 energy += buf[..n].iter().map(|&s| (s as f64) * (s as f64)).sum::<f64>();
                 count += n;
             }
@@ -422,5 +439,6 @@ mod tests {
         render.shutdown();
         capture.shutdown();
         assert!(onset.is_some() && rms > 0.1, "the tone didn't arrive");
+        onset.unwrap()
     }
 }

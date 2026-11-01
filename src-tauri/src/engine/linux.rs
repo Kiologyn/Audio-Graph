@@ -22,7 +22,9 @@ use std::time::{Duration, Instant};
 
 /// The mark in our modules' arguments
 const MARK: &str = "audiograph";
-/// Loopback latency: with less, PulseAudio starts to stutter on weak machines
+/// Loopback latency: with less, PulseAudio starts to stutter on weak machines.
+/// An output's delay is added to it: the loopback holds the sound that much longer
+/// (measured: exact on PipeWire up to about 2 s; PulseAudio reaches it over the first seconds)
 const LATENCY_MS: u32 = 30;
 /// How often to retry what failed (no device, the server refused)
 const RETRY: Duration = Duration::from_secs(2);
@@ -85,6 +87,8 @@ struct LoadedCable {
 
 struct Link {
     module: u32,
+    /// latency_msec it was loaded with: a changed delay means loading it again
+    latency: u32,
 }
 
 /// The server state at the start of a tick
@@ -683,13 +687,20 @@ impl Backend {
 
     /// Loopbacks between devices per the plan's streams
     fn apply_links(&mut self, plan: &Plan, snap: &Snapshot) -> Vec<StreamStatus> {
-        let mut wanted: BTreeMap<(String, String), f32> = BTreeMap::new();
+        // link → volume, latency
+        let mut wanted: BTreeMap<(String, String), (f32, u32)> = BTreeMap::new();
         for stream in &plan.streams {
             for source in &stream.sources {
-                wanted.insert((source.device.clone(), stream.sink.clone()), source.gain);
+                let latency = LATENCY_MS + (source.delay * 1000.0).round() as u32;
+                wanted.insert((source.device.clone(), stream.sink.clone()), (source.gain, latency));
             }
         }
-        let unwanted: Vec<(String, String)> = self.links.keys().filter(|k| !wanted.contains_key(*k)).cloned().collect();
+        let unwanted: Vec<(String, String)> = self
+            .links
+            .iter()
+            .filter(|(k, link)| wanted.get(*k).is_none_or(|(_, latency)| *latency != link.latency))
+            .map(|(k, _)| k.clone())
+            .collect();
         for key in unwanted {
             if let Some(link) = self.links.remove(&key) {
                 let _ = self.pulse().and_then(|p| p.unload_module(link.module));
@@ -698,7 +709,7 @@ impl Backend {
 
         let mut errors: HashMap<(String, String), DeviceError> = HashMap::new();
         let mut loaded_new: Vec<u32> = Vec::new();
-        for ((source, sink), _) in &wanted {
+        for ((source, sink), &(_, latency)) in &wanted {
             let key = (source.clone(), sink.clone());
             if self.links.contains_key(&key) {
                 continue;
@@ -721,13 +732,13 @@ impl Backend {
                 continue;
             }
             let args = format!(
-                "source={source} sink={sink} latency_msec={LATENCY_MS} source_dont_move=true sink_dont_move=true \
+                "source={source} sink={sink} latency_msec={latency} source_dont_move=true sink_dont_move=true \
                  sink_input_properties='{LINK_PROPS}' source_output_properties='{LINK_PROPS}'"
             );
             match self.pulse().and_then(|p| p.load_module("module-loopback", &args)) {
                 Ok(module) => {
                     self.failed.remove(&retry_key);
-                    self.links.insert(key, Link { module });
+                    self.links.insert(key, Link { module, latency });
                     loaded_new.push(module);
                 }
                 Err(e) => {
@@ -750,7 +761,7 @@ impl Backend {
                 Ok(ready)
             });
         }
-        for (key, gain) in &wanted {
+        for (key, (gain, _)) in &wanted {
             let Some(link) = self.links.get(key) else { continue };
             let Some(input) = link_input(&inputs, link.module) else { continue };
             let volume = pulse::linear(input.volume.len(), *gain);
@@ -925,8 +936,8 @@ mod tests {
         let plan = Plan {
             virtual_cables: vec![cable()],
             streams: vec![
-                PlanStream { sink: "audiograph.t1".into(), sources: vec![Source { device: "agtest.mic.src".into(), gain: 1.0 }] },
-                PlanStream { sink: "agtest.out".into(), sources: vec![Source { device: "audiograph.t1.out".into(), gain: 0.5 }] },
+                PlanStream { output: false, sink: "audiograph.t1".into(), sources: vec![Source { device: "agtest.mic.src".into(), gain: 1.0, delay: 0.0 }] },
+                PlanStream { output: true, sink: "agtest.out".into(), sources: vec![Source { device: "audiograph.t1.out".into(), gain: 0.5, delay: 0.0 }] },
             ],
             ..Plan::default()
         };
@@ -951,7 +962,7 @@ mod tests {
         let louder = Plan {
             streams: vec![
                 plan.streams[0].clone(),
-                PlanStream { sink: "agtest.out".into(), sources: vec![Source { device: "audiograph.t1.out".into(), gain: 1.0 }] },
+                PlanStream { output: true, sink: "agtest.out".into(), sources: vec![Source { device: "audiograph.t1.out".into(), gain: 1.0, delay: 0.0 }] },
             ],
             ..plan.clone()
         };
@@ -964,6 +975,29 @@ mod tests {
         ticks(&mut backend, &Plan::default());
         assert!(our_modules().is_empty(), "{:?}", our_modules());
         assert!(!pactl(&["list", "short", "sinks"]).contains("audiograph.t1"));
+    }
+
+    #[test]
+    #[ignore]
+    fn delay_is_loopback_latency() {
+        let _devices = Devices::new();
+        let (mut backend, _) = backend();
+        let plan = |delay| Plan {
+            streams: vec![PlanStream { output: true, sink: "agtest.out".into(), sources: vec![Source { device: "agtest.mic.src".into(), gain: 1.0, delay }] }],
+            ..Plan::default()
+        };
+        let loopback = || our_modules().into_iter().find(|m| m.contains("module-loopback"));
+        // the delay is added to the loopback's own latency
+        ticks(&mut backend, &plan(0.25));
+        let first = loopback().expect("no loopback");
+        assert!(first.contains(&format!("latency_msec={}", LATENCY_MS + 250)), "{first}");
+        // another delay loads the loopback again
+        ticks(&mut backend, &plan(0.0));
+        let second = loopback().expect("no loopback");
+        assert!(second.contains(&format!("latency_msec={LATENCY_MS} ")), "{second}");
+        assert_eq!(our_modules().iter().filter(|m| m.contains("module-loopback")).count(), 1);
+        ticks(&mut backend, &Plan::default());
+        assert!(our_modules().is_empty(), "{:?}", our_modules());
     }
 
     /// A process that is closed with the test, even if the test fails
@@ -1114,7 +1148,7 @@ mod tests {
         let (mut backend, _) = backend();
         let plan = |label: &str| Plan {
             virtual_cables: vec![VirtualCable { label: label.into(), ..cable() }],
-            streams: vec![PlanStream { sink: "agtest.out".into(), sources: vec![Source { device: "audiograph.t1.out".into(), gain: 1.0 }] }],
+            streams: vec![PlanStream { output: true, sink: "agtest.out".into(), sources: vec![Source { device: "audiograph.t1.out".into(), gain: 1.0, delay: 0.0 }] }],
             ..Plan::default()
         };
         ticks(&mut backend, &plan("First"));
@@ -1144,8 +1178,8 @@ mod tests {
         let plan = |label: &str| Plan {
             virtual_cables: vec![VirtualCable { label: label.into(), ..cable() }],
             streams: vec![
-                PlanStream { sink: "audiograph.t1".into(), sources: vec![Source { device: "agtest.mic.src".into(), gain: 1.0 }] },
-                PlanStream { sink: "agtest.out".into(), sources: vec![Source { device: "audiograph.t1.out".into(), gain: 0.7 }] },
+                PlanStream { output: false, sink: "audiograph.t1".into(), sources: vec![Source { device: "agtest.mic.src".into(), gain: 1.0, delay: 0.0 }] },
+                PlanStream { output: true, sink: "agtest.out".into(), sources: vec![Source { device: "audiograph.t1.out".into(), gain: 0.7, delay: 0.0 }] },
             ],
             routes: vec![AppRoute {
                 node: "app".into(),

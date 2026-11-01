@@ -13,6 +13,7 @@ The graph above sends Spotify to the headphones and, at the same time, mixes it 
 - **Cables.** A cable mixes everything that goes into it and passes it on. On Windows a cable is either a mix point inside the app or a pair of devices of a virtual cable driver. On Linux every cable node is a virtual device that the graph creates while it runs and that other programs can use too.
 - **Finding cables (Windows).** *Find cables* in the **Cables** menu adds the device pairs of installed virtual cable drivers, recognized by the drivers' device properties. A cable whose input and output belong to different driver lines gets a warning. A cable with only its input chosen still works for devices: the app records what is played into the input.
 - **Volume on every node.** Devices and cables go from 0 to 200%; apps go up to 100% (their volume in the system mixer).
+- **Output delay.** Turned on per graph in its options (the arrow next to it in the graph list, along with its volume sliders), a slider on Output nodes shifts their sound in time, for example to match speakers to Bluetooth headphones: plus plays it later, minus earlier than the other outputs (which are then delayed instead). The range is set next to that checkbox: ±0.5 s by default and up to ±1 s, in 1 ms steps. Only sound that Audio Graph plays can be delayed: an app or the System node connected straight to an output plays through the system, and the node says so.
 - **Several graphs at once.** Run them from the graph list; drag graphs and cables by their handles to reorder the lists. A running dot shows which ones are active, and it turns red if something is wrong.
 - **Problems are shown in place.** Missing devices, loops, an app connected to two outputs, conflicts between running graphs: the node gets a red note, the arrow turns red, and the header lists everything.
 - **Everything is put back.** When a graph stops or the app quits, apps get their previous devices and volumes, and the system gets its previous default devices. If the app is killed, this happens on the next start.
@@ -41,7 +42,7 @@ The graph above sends Spotify to the headphones and, at the same time, mixes it 
 | App → device or cable | the app's own output device is set to it | the app's playback streams are moved to it |
 | Device or cable → App | the app's own input device is set to it | the app's recording streams are moved to it |
 | System → … / … → System | the default output and input devices are switched while the graph runs | the same, through the audio server |
-| Between inputs, outputs and cables | the Audio Graph engine: WASAPI shared-mode streams, 48 kHz float stereo, with clock drift correction between devices | the audio server: a loopback per arrow, with the path's volume |
+| Between inputs, outputs and cables | the Audio Graph engine: WASAPI shared-mode streams, 48 kHz float stereo, with clock drift correction between devices; an output's delay is held in the link's buffer | the audio server: a loopback per arrow, with the path's volume; an output's delay is added to the loopback's latency |
 | Cable | a mix point inside the engine, or a pair of driver devices | a virtual output device and a virtual input device named after the node |
 
 Things that follow from this:

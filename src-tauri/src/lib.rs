@@ -72,7 +72,7 @@ pub fn run() {
             graphs::graph_create,
             graphs::graph_save,
             graphs::graph_rename,
-            graphs::graph_set_show_volume,
+            graphs::graph_set_sliders,
             graphs::graph_delete,
             graphs::graphs_reorder,
             cables::cables_list,
