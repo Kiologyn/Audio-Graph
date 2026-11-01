@@ -1,33 +1,33 @@
 import type { Edge, Node } from "@xyflow/react";
 
 /**
- * Виды нод графа.
- * - input  — устройство ввода (микрофон, запись кабеля): только выход
- * - output — устройство вывода (наушники, колонки): только вход
- * - app    — приложение: выход = его звук, вход = его микрофон
- * - cable  — кабель: внутренний микшер или кабель из общего списка (пара системных устройств)
- * - system — устройства по умолчанию в Windows: выход = звук приложений, играющих в устройство
- *            вывода по умолчанию, вход = то, что они слышат как микрофон по умолчанию
+ * Graph node kinds.
+ * - input  — an input device (microphone, a cable's recording side): output only
+ * - output — an output device (headphones, speakers): input only
+ * - app    — an app: output = its sound, input = its microphone
+ * - cable  — a cable: an internal mixer or a cable from the shared list (a pair of system devices)
+ * - system — the system's default devices: output = sound of the apps playing into the default
+ *            output device, input = what they hear as the default microphone
  */
 export type AudioNodeKind = "input" | "output" | "app" | "cable" | "system";
 
-/** Привязка порта к системному устройству. Совпадает с DeviceRef в graphs.rs. */
+/** A port's binding to a system device. Matches DeviceRef in graphs.rs. */
 export type DeviceRef =
   | { type: "default" }
-  // имя запоминается, чтобы показывать его, пока устройство отключено
+  // the name is remembered to show it while the device is unplugged
   | { type: "device"; id: string; name: string };
 
-/** Приложение ноды приложения. Совпадает с AppRef в graphs.rs. */
+/** The app of an app node. Matches AppRef in graphs.rs. */
 export type AppRef = {
-  /** имя исполняемого файла: по нему приложение узнаётся, даже если сменилась папка */
+  /** executable file name: the app is recognized by it even if its folder changed */
   exe: string;
-  /** полный путь, под которым приложение было выбрано */
+  /** the full path the app was chosen under */
   path: string;
-  /** название, чтобы показывать его, пока приложение не запущено */
+  /** the name, shown while the app isn't running */
   name: string;
 };
 
-/** sink — устройство вывода за входным портом, source — устройство записи за выходным */
+/** sink is the output device behind the input port, source the recording device behind the output port */
 export type DeviceSlotName = "sink" | "source";
 
 export type AudioNodeData = {
@@ -35,10 +35,10 @@ export type AudioNodeData = {
   label: string;
   sink: DeviceRef | null;
   source: DeviceRef | null;
-  /** id кабеля из общего списка кабелей (cables.ts); null — внутренний кабель */
+  /** id of a cable from the shared cable list (cables.ts); null is an internal cable */
   cable: string | null;
   app: AppRef | null;
-  /** Громкость: 1 — без изменений, 0 — тишина, больше 1 — усиление */
+  /** Volume: 1 is unchanged, 0 is silence, above 1 is gain */
   volume: number;
 };
 
@@ -46,13 +46,13 @@ export type AudioNode = Node<AudioNodeData, "audio">;
 export type AudioEdge = Edge;
 
 export type DeviceSlot = {
-  /** Текст, пока устройство не выбрано */
+  /** Text while no device is chosen */
   placeholder: string;
-  /** Можно ли выбрать «по умолчанию» (следовать за системным устройством) */
+  /** Whether "default" can be chosen (follow the system device) */
   allowDefault: boolean;
 };
 
-/** Тексты — ключи перевода (i18n.ts) */
+/** Texts are translation keys (i18n.ts) */
 type KindMeta = {
   title: string;
   defaultLabel: string;
@@ -60,56 +60,56 @@ type KindMeta = {
   hasOutput: boolean;
   sink?: DeviceSlot;
   source?: DeviceSlot;
-  /** Нода выбирает кабель из общего списка кабелей */
+  /** The node chooses a cable from the shared cable list */
   pickCable?: boolean;
-  /** Нода выбирает запущенное приложение */
+  /** The node chooses a running app */
   pickApp?: boolean;
-  /** Нода показывает текущие устройства по умолчанию */
+  /** The node shows the current default devices */
   showDefaults?: boolean;
   /**
-   * Наибольшая громкость. Усиление больше 1 делает только движок; у приложения громкость —
-   * это громкость в микшере Windows, она не выше 100%. Без поля громкости у ноды нет
+   * Maximum volume. Only the engine applies gain above 1; an app's volume
+   * is its volume in the system mixer, at most 100%. Without this field the node has no
    */
   maxVolume?: number;
 };
 
 export const NODE_KINDS: Record<AudioNodeKind, KindMeta> = {
   input: {
-    title: "Ввод",
-    defaultLabel: "Микрофон",
+    title: "node_input",
+    defaultLabel: "label_microphone",
     hasInput: false,
     hasOutput: true,
-    source: { placeholder: "Устройство не выбрано", allowDefault: true },
+    source: { placeholder: "placeholder_no_device", allowDefault: true },
     maxVolume: 2,
   },
   output: {
-    title: "Вывод",
-    defaultLabel: "Наушники",
+    title: "node_output",
+    defaultLabel: "label_headphones",
     hasInput: true,
     hasOutput: false,
-    sink: { placeholder: "Устройство не выбрано", allowDefault: true },
+    sink: { placeholder: "placeholder_no_device", allowDefault: true },
     maxVolume: 2,
   },
   app: {
-    title: "Приложение",
-    defaultLabel: "Приложение",
+    title: "node_app",
+    defaultLabel: "node_app",
     hasInput: true,
     hasOutput: true,
     pickApp: true,
     maxVolume: 1,
   },
   cable: {
-    title: "Кабель",
-    defaultLabel: "Кабель",
+    title: "node_cable",
+    defaultLabel: "node_cable",
     hasInput: true,
     hasOutput: true,
-    // пара устройств задаётся в списке кабелей, нода только ссылается на кабель
+    // the device pair is set in the cable list, the node only refers to the cable
     pickCable: true,
     maxVolume: 2,
   },
   system: {
-    title: "Система",
-    defaultLabel: "Устройства по умолчанию",
+    title: "node_system",
+    defaultLabel: "label_default_devices",
     hasInput: true,
     hasOutput: true,
     showDefaults: true,

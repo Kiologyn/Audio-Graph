@@ -2,18 +2,18 @@ import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import type { AppRef } from "./types";
 
-/** Совпадает с AudioApp в src-tauri/src/apps/mod.rs */
+/** Matches AudioApp in src-tauri/src/apps/mod.rs */
 export type AudioApp = {
   exe: string;
   path: string;
   name: string;
-  /** есть звуковой сеанс: приложение видно в микшере громкости */
+  /** has an audio session: the app is shown in the volume mixer */
   hasAudio: boolean;
-  /** сейчас воспроизводит или записывает звук */
+  /** is playing or recording sound right now */
   playing: boolean;
 };
 
-/** Запущенные приложения. Как и устройства, обновляются при каждом открытии списка. */
+/** Running apps. Like devices, refreshed every time the list opens. */
 type AppsState = {
   apps: AudioApp[];
   loaded: boolean;
@@ -22,10 +22,10 @@ type AppsState = {
   refresh: () => Promise<void>;
 };
 
-// одновременные запросы обновления склеиваются в один
+// concurrent refresh requests are merged into one
 let inflight: Promise<void> | null = null;
 
-// см. store.ts: при правке модуля в разработке — полная перезагрузка страницы
+// see store.ts: editing this module in development reloads the whole page
 import.meta.hot?.accept(() => location.reload());
 
 export const useApps = create<AppsState>()((set, get) => ({
@@ -51,8 +51,8 @@ export const useApps = create<AppsState>()((set, get) => ({
 }));
 
 /**
- * Запущенное приложение для выбранного в ноде: сначала по полному пути, потом по имени файла
- * (после обновления папка может смениться, как у Discord: app-1.0.9266).
+ * The running app for the one chosen in a node: by full path first, then by file name
+ * (an update can change the folder, as with Discord: app-1.0.9266).
  */
 export function findApp(ref: AppRef | null, apps: AudioApp[]): AudioApp | undefined {
   if (!ref) return undefined;

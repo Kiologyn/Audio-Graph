@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useT } from "../i18n";
 import type { GraphMeta } from "./doc";
 import { useEngine } from "./engine";
 import { Icon } from "./icons";
 import { useLibrary } from "./library";
+import { useSortable } from "./sortable";
 import { useGraph } from "./store";
 
 type RowMode = "view" | "edit" | "confirm";
@@ -14,12 +15,15 @@ function GraphRow({
   mode,
   setMode,
   onOpen,
+  grip,
 }: {
   graph: GraphMeta;
   current: boolean;
   mode: RowMode;
   setMode: (mode: RowMode) => void;
   onOpen: () => void;
+  /** The handle to drag the row by */
+  grip: ReactNode;
 }) {
   const rename = useLibrary((s) => s.rename);
   const remove = useLibrary((s) => s.remove);
@@ -44,7 +48,7 @@ function GraphRow({
           onKeyDown={(e) => {
             if (e.key === "Enter") commit(e.currentTarget.value);
             if (e.key === "Escape") {
-              // Escape отменяет переименование, а не закрывает меню
+              // Escape cancels renaming instead of closing the menu
               e.stopPropagation();
               setMode("view");
             }
@@ -52,8 +56,8 @@ function GraphRow({
         />
         <button
           className="ag-panel__action is-confirm"
-          title={t("Сохранить")}
-          // без этого поле потеряет фокус раньше клика и строка закроется по blur
+          title={t("save")}
+          // without this the field loses focus before the click and the row closes on blur
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => commit(input.current?.value ?? "")}
         >
@@ -66,12 +70,12 @@ function GraphRow({
   if (mode === "confirm") {
     return (
       <div className="ag-panel__row is-confirm">
-        <span className="ag-panel__confirm-text">{t("Удалить «{name}»?", { name: graph.name })}</span>
+        <span className="ag-panel__confirm-text">{t("delete_confirm", { name: graph.name })}</span>
         <button className="ag-panel__small is-danger" onClick={() => remove(graph.id)}>
-          {t("Удалить")}
+          {t("delete")}
         </button>
         <button className="ag-panel__small" onClick={() => setMode("view")}>
-          {t("Отмена")}
+          {t("cancel")}
         </button>
       </div>
     );
@@ -79,23 +83,24 @@ function GraphRow({
 
   return (
     <div className={`ag-panel__row${current ? " is-current" : ""}`}>
+      {grip}
       <RunState id={graph.id} />
       <button className="ag-panel__name" onClick={onOpen} onDoubleClick={() => setMode("edit")} title={graph.name}>
         {graph.name}
       </button>
       <VolumeToggle graph={graph} />
       <RunToggle id={graph.id} />
-      <button className="ag-panel__action" title={t("Переименовать")} onClick={() => setMode("edit")}>
+      <button className="ag-panel__action" title={t("rename")} onClick={() => setMode("edit")}>
         <Icon name="pencil" />
       </button>
-      <button className="ag-panel__action is-danger" title={t("Удалить")} onClick={() => setMode("confirm")}>
+      <button className="ag-panel__action is-danger" title={t("delete")} onClick={() => setMode("confirm")}>
         <Icon name="trash" />
       </button>
     </div>
   );
 }
 
-/** Точка у графа в списке: зелёная — работает, красная — работает с проблемами */
+/** The dot of a graph in the list: green means running, red means running with problems */
 function RunState({ id }: { id: string }) {
   const running = useEngine((s) => s.status.running.includes(id));
   const troubled = useEngine((s) => s.status.troubled.includes(id));
@@ -104,17 +109,17 @@ function RunState({ id }: { id: string }) {
   return (
     <span
       className={`ag-graphs__state is-running${troubled ? " is-troubled" : ""}`}
-      title={troubled ? t("Работает, но не всё: есть проблемы") : t("Работает")}
+      title={troubled ? t("graph_running_with_problems") : t("graph_running")}
     />
   );
 }
 
-/** Галочка графа: показывать ли на его нодах регуляторы громкости */
+/** The graph's checkbox: whether its nodes show volume sliders */
 function VolumeToggle({ graph }: { graph: GraphMeta }) {
   const setShowVolume = useLibrary((s) => s.setShowVolume);
   const t = useT();
   return (
-    <label className="ag-graphs__volume" title={t("Громкость нод: показывать регуляторы")}>
+    <label className="ag-graphs__volume" title={t("graph_volume_toggle")}>
       <input
         type="checkbox"
         checked={graph.showVolume ?? true}
@@ -125,14 +130,14 @@ function VolumeToggle({ graph }: { graph: GraphMeta }) {
   );
 }
 
-/** Запуск и остановка графа прямо из списка */
+/** Starting and stopping a graph right from the list */
 function RunToggle({ id }: { id: string }) {
   const running = useEngine((s) => s.status.running.includes(id));
   const t = useT();
   return (
     <button
       className={`ag-panel__action${running ? " is-danger" : " is-run"}`}
-      title={running ? t("Остановить") : t("Запустить")}
+      title={running ? t("stop") : t("start")}
       onClick={() => (running ? useEngine.getState().stop(id) : useEngine.getState().start(id))}
     >
       <Icon name={running ? "stop" : "play"} />
@@ -140,18 +145,23 @@ function RunToggle({ id }: { id: string }) {
   );
 }
 
-/** Выбор открытого графа и управление списком графов */
+/** Choosing the open graph and managing the graph list */
 export function GraphMenu() {
   const graphs = useLibrary((s) => s.graphs);
   const open = useLibrary((s) => s.open);
   const create = useLibrary((s) => s.create);
+  const reorder = useLibrary((s) => s.reorder);
   const current = useGraph((s) => s.meta);
   const runningCount = useEngine((s) => s.status.running.length);
   const [isOpen, setOpen] = useState(false);
-  // в каждый момент не больше одной строки переименовывается или ждёт подтверждения
+  // at most one row at a time is being renamed or awaits confirmation
   const [active, setActive] = useState<{ id: string; mode: RowMode } | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const t = useT();
+  const sortable = useSortable(
+    graphs.map((g) => g.id),
+    reorder,
+  );
 
   const close = () => {
     setOpen(false);
@@ -182,12 +192,12 @@ export function GraphMenu() {
       <button
         className={`ag-header-btn${isOpen ? " is-open" : ""}`}
         onClick={() => (isOpen ? close() : setOpen(true))}
-        title={t("Графы")}
+        title={t("graphs")}
       >
         <Icon name="graph" />
         <span className="ag-header-btn__name">{current?.name ?? "…"}</span>
         {runningCount > 0 && (
-          <span className="ag-count is-running" title={t("Запущено графов: {count}", { count: runningCount })}>
+          <span className="ag-count is-running" title={t("graphs_running_count", { count: runningCount })}>
             {runningCount}
           </span>
         )}
@@ -196,22 +206,33 @@ export function GraphMenu() {
 
       {isOpen && (
         <div className="ag-panel">
-          <div className="ag-panel__list">
+          <div className={`ag-panel__list${sortable.dragging ? " is-sorting" : ""}`}>
             {graphs.map((g) => (
-              <GraphRow
+              <div
                 key={g.id}
-                graph={g}
-                current={g.id === current?.id}
-                mode={active?.id === g.id ? active.mode : "view"}
-                setMode={(mode) => setActive(mode === "view" ? null : { id: g.id, mode })}
-                onOpen={() => open(g.id)}
-              />
+                ref={sortable.row(g.id)}
+                className={`ag-sortable${sortable.dragging === g.id ? " is-dragging" : ""}`}
+                style={sortable.style(g.id)}
+              >
+                <GraphRow
+                  graph={g}
+                  current={g.id === current?.id}
+                  mode={active?.id === g.id ? active.mode : "view"}
+                  setMode={(mode) => setActive(mode === "view" ? null : { id: g.id, mode })}
+                  onOpen={() => open(g.id)}
+                  grip={
+                    <span className="ag-panel__grip" title={t("drag_to_reorder")} {...sortable.handle(g.id)}>
+                      <Icon name="grip" />
+                    </span>
+                  }
+                />
+              </div>
             ))}
           </div>
           <div className="ag-panel__footer">
             <button className="ag-panel__add" onClick={createAndRename}>
               <Icon name="plus" />
-              {t("Новый граф")}
+              {t("new_graph")}
             </button>
           </div>
         </div>

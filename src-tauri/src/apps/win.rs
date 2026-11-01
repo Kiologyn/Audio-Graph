@@ -1,5 +1,5 @@
-//! Приложения Windows: звуковые сеансы (как в микшере громкости) и окна, которые видны
-//! на панели задач. Приложение без звука тоже можно выбрать заранее.
+//! Windows apps: audio sessions (as in the volume mixer) and windows shown
+//! on the taskbar. An app without sound can be chosen in advance too.
 
 use super::AudioApp;
 use crate::com::{wide, ComGuard};
@@ -23,10 +23,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GWL_EXSTYLE, GW_OWNER, WS_EX_TOOLWINDOW,
 };
 
-/// Служебные процессы оболочки: окна у них есть, но это не приложения
+/// Shell service processes: they have windows but are not apps
 const SKIP: &[&str] = &["applicationframehost.exe", "textinputhost.exe", "explorer.exe"];
 
-/// Регуляторы громкости сеансов воспроизведения — те же, что в микшере громкости: pid → его сеансы
+/// Volume controls of playback sessions, the same as in the volume mixer: pid → its sessions
 pub fn session_volumes() -> HashMap<u32, Vec<ISimpleAudioVolume>> {
     let mut map: HashMap<u32, Vec<ISimpleAudioVolume>> = HashMap::new();
     unsafe {
@@ -59,14 +59,14 @@ pub fn session_volumes() -> HashMap<u32, Vec<ISimpleAudioVolume>> {
     map
 }
 
-/// Процессы со звуковыми сеансами на всех включённых устройствах: pid → сеанс сейчас активен
+/// Processes with audio sessions on all enabled devices: pid → a session is active now
 pub fn session_pids() -> Result<HashMap<u32, bool>> {
     let mut pids = HashMap::new();
     unsafe {
         let enumerator: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
         let devices = enumerator.EnumAudioEndpoints(eAll, DEVICE_STATE_ACTIVE)?;
         for i in 0..devices.GetCount()? {
-            // одно сломанное устройство не должно прятать сеансы на остальных
+            // one broken device must not hide the sessions on the others
             let Ok(manager) = devices.Item(i).and_then(|d| d.Activate::<IAudioSessionManager2>(CLSCTX_ALL, None))
             else {
                 continue;
@@ -76,7 +76,7 @@ pub fn session_pids() -> Result<HashMap<u32, bool>> {
                 let Ok(control) = sessions.GetSession(j).and_then(|s| s.cast::<IAudioSessionControl2>()) else {
                     continue;
                 };
-                // «Системные звуки» — отдельный сеанс без своего приложения
+                // "System sounds" is a separate session without an app
                 if control.IsSystemSoundsSession() == S_OK {
                     continue;
                 }
@@ -92,7 +92,7 @@ pub fn session_pids() -> Result<HashMap<u32, bool>> {
     Ok(pids)
 }
 
-/// Окно, которое видно на панели задач: видимое, с заголовком, без владельца, не панель инструментов
+/// A window shown on the taskbar: visible, with a title, without an owner, not a tool window
 unsafe fn is_app_window(hwnd: HWND) -> bool {
     if !IsWindowVisible(hwnd).as_bool() || GetWindowTextLengthW(hwnd) == 0 {
         return false;
@@ -100,7 +100,7 @@ unsafe fn is_app_window(hwnd: HWND) -> bool {
     if GetWindow(hwnd, GW_OWNER).is_ok() || GetWindowLongW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW.0 != 0 {
         return false;
     }
-    // окна, спрятанные системой: приложения из магазина в фоне, служебные окна оболочки
+    // windows hidden by the system: Store apps in the background, shell service windows
     let mut cloaked = 0u32;
     let _ = DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &mut cloaked as *mut u32 as *mut c_void, 4);
     cloaked == 0
@@ -134,7 +134,7 @@ pub fn process_path(pid: u32) -> Option<String> {
     }
 }
 
-/// «Описание файла» из его свойств: так приложение называет микшер громкости
+/// "File description" from its properties: the volume mixer names the app this way
 fn file_description(path: &str) -> Option<String> {
     let path = wide(path);
     unsafe {
@@ -147,7 +147,7 @@ fn file_description(path: &str) -> Option<String> {
         let block = data.as_ptr() as *const c_void;
         let mut ptr: *mut c_void = std::ptr::null_mut();
         let mut len = 0u32;
-        // строки лежат по языкам; берём первый язык из таблицы переводов
+        // strings are stored per language; take the first language of the translation table
         if !VerQueryValueW(block, w!("\\VarFileInfo\\Translation"), &mut ptr, &mut len).as_bool() || len < 4 {
             return None;
         }
@@ -156,7 +156,7 @@ fn file_description(path: &str) -> Option<String> {
         if !VerQueryValueW(block, PCWSTR(key.as_ptr()), &mut ptr, &mut len).as_bool() || len == 0 {
             return None;
         }
-        // у некоторых файлов длина больше строки и захватывает следующую запись: режем по нулю
+        // some files give a length past the string that covers the next entry: cut at the zero
         let raw = std::slice::from_raw_parts(ptr as *const u16, len as usize);
         let raw = &raw[..raw.iter().position(|&c| c == 0).unwrap_or(raw.len())];
         let text = String::from_utf16_lossy(raw);
@@ -171,7 +171,7 @@ pub fn list() -> Result<Vec<AudioApp>> {
     let windows = window_pids()?;
     let own = unsafe { GetCurrentProcessId() };
 
-    // у браузеров и Discord много процессов с одним файлом: одно приложение на файл
+    // browsers and Discord have many processes of one file: one app per file
     let mut apps: Vec<AudioApp> = Vec::new();
     let mut by_path: HashMap<String, usize> = HashMap::new();
     let pids = sessions

@@ -8,7 +8,7 @@ import { Popover } from "./Popover";
 import { allProblems } from "./problems";
 import { useGraph } from "./store";
 
-/** Запуск и остановка графа, его состояние и список проблем — в шапке справа */
+/** Starting and stopping the graph, its state and problem list: on the right of the header */
 export function RunControl() {
   const status = useEngine((s) => s.status);
   const error = useEngine((s) => s.error);
@@ -20,7 +20,7 @@ export function RunControl() {
   const [open, setOpen] = useState(false);
   const t = useT();
 
-  // t в зависимостях: тексты проблем переводятся при смене языка
+  // t in the dependencies: problem texts are translated when the language changes
   const problems = useMemo(
     () => allProblems(status, graphId, nodes, cables, devices),
     [status, graphId, nodes, cables, devices, t],
@@ -33,7 +33,7 @@ export function RunControl() {
       {runningThis && (
         <span className="ag-run__state is-on">
           <span className="ag-run__dot" />
-          {t("Работает")}
+          {t("graph_running")}
         </span>
       )}
       {error && <span className="ag-run__state is-error">{error}</span>}
@@ -43,7 +43,7 @@ export function RunControl() {
           ref={anchor}
           className={`ag-header-btn ag-run__problems${errors ? " is-error" : ""}${open ? " is-open" : ""}`}
           onClick={() => setOpen(!open)}
-          title={t("Проблемы графа")}
+          title={t("graph_problems")}
         >
           <Icon name="warning" />
           {problems.length}
@@ -63,7 +63,7 @@ export function RunControl() {
       {runningThis ? (
         <button
           className="ag-run__btn is-stop"
-          title={t("Остановить")}
+          title={t("stop")}
           onClick={() => graphId && useEngine.getState().stop(graphId)}
         >
           <Icon name="stop" />
@@ -71,7 +71,7 @@ export function RunControl() {
       ) : (
         <button
           className="ag-run__btn"
-          title={t("Запустить")}
+          title={t("start")}
           disabled={!graphId}
           onClick={() => graphId && useEngine.getState().start(graphId)}
         >

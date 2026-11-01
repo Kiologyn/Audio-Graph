@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   cableDeviceOwners,
+  cableMismatch,
   cablePower,
   cableDeviceIds,
   idsToToggle,
+  newFoundCables,
   useCablePanel,
   useCables,
   type Cable,
@@ -12,19 +14,20 @@ import { useT } from "../i18n";
 import { describeDevice, useDevices } from "./devices";
 import { DevicePicker } from "./DevicePicker";
 import { Icon, KindIcon } from "./icons";
+import { useSortable } from "./sortable";
 import type { DeviceSlot } from "./types";
 
-const CABLE_SLOT: DeviceSlot = { placeholder: "Не выбрано", allowDefault: false };
+const CABLE_SLOT: DeviceSlot = { placeholder: "cable_slot_not_selected", allowDefault: false };
 
-// ключи перевода
+// translation keys
 const POWER_TITLE = {
-  on: "Кабель включён — выключить",
-  off: "Кабель выключен — включить",
-  mixed: "Кабель включён частично — включить полностью",
-  none: "Нечего включать: устройства кабеля не выбраны или их нет в системе",
+  on: "cable_power_on",
+  off: "cable_power_off",
+  mixed: "cable_power_mixed",
+  none: "cable_power_none",
 };
 
-/** Переключатель кабеля: включает и выключает оба его устройства в системе */
+/** Cable switch: turns both of its devices on and off in the system */
 function PowerSwitch({ cable }: { cable: Cable }) {
   const devices = useDevices((s) => s.devices);
   const pending = useDevices((s) => s.pending);
@@ -32,7 +35,7 @@ function PowerSwitch({ cable }: { cable: Cable }) {
   const t = useT();
   const power = cablePower(cable, devices);
   const busy = cableDeviceIds(cable).some((id) => pending.includes(id));
-  // выключенный и частично выключенный кабель по нажатию включается целиком
+  // a cable that is off or partly off turns fully on when clicked
   const enable = power !== "on";
 
   return (
@@ -47,7 +50,7 @@ function PowerSwitch({ cable }: { cable: Cable }) {
   );
 }
 
-/** Включить или выключить все кабели разом */
+/** Turn all cables on or off at once */
 function BulkPower({ cables }: { cables: Cable[] }) {
   const devices = useDevices((s) => s.devices);
   const pending = useDevices((s) => s.pending);
@@ -59,69 +62,83 @@ function BulkPower({ cables }: { cables: Cable[] }) {
 
   return (
     <div className="ag-cables__bulk">
-      <span>{t("Все кабели")}</span>
+      <span>{t("all_cables")}</span>
       <button
         className="ag-panel__small"
         disabled={busy || toEnable.length === 0}
         onClick={() => setEnabled(toEnable, true)}
       >
-        {t("Включить")}
+        {t("turn_on")}
       </button>
       <button
         className="ag-panel__small"
         disabled={busy || toDisable.length === 0}
         onClick={() => setEnabled(toDisable, false)}
       >
-        {t("Выключить")}
+        {t("turn_off")}
       </button>
     </div>
   );
 }
 
-function CableRow({ cable, onEdit, onDelete }: { cable: Cable; onEdit: () => void; onDelete: () => void }) {
+function CableRow({
+  cable,
+  onEdit,
+  onDelete,
+  grip,
+}: {
+  cable: Cable;
+  onEdit: () => void;
+  onDelete: () => void;
+  /** The handle to drag the row by */
+  grip: ReactNode;
+}) {
   const devices = useDevices((s) => s.devices);
   const loaded = useDevices((s) => s.loaded);
   const t = useT();
   const sides = [
-    { caption: "Вход", d: describeDevice(cable.render, "render", devices, loaded) },
-    { caption: "Выход", d: describeDevice(cable.capture, "capture", devices, loaded) },
+    { caption: "cable_in", d: describeDevice(cable.render, "render", devices, loaded) },
+    { caption: "cable_out", d: describeDevice(cable.capture, "capture", devices, loaded) },
   ];
+  const mismatch = cableMismatch(cable, devices);
 
   return (
     <div className="ag-panel__row">
-      <button className="ag-cables__info" onClick={onEdit} title={t("Настроить кабель")}>
+      {grip}
+      <button className="ag-cables__info" onClick={onEdit} title={t("cable_setup_hint")}>
         <span className="ag-cables__name">{cable.name}</span>
         {sides.map(({ caption, d }) => (
           <span
             key={caption}
             className={`ag-cables__side${d.missing ? " is-missing" : ""}${d.text ? "" : " is-empty"}`}
           >
-            {t(caption)}: {d.text ?? t("не выбрано")}
-            {d.missing && t(" — недоступно")}
-            {d.disabled && t(" — отключено")}
+            {t(caption)}: {d.text ?? t("not_selected")}
+            {d.missing && t("device_unavailable_suffix")}
+            {d.disabled && t("device_disabled_suffix")}
           </span>
         ))}
+        {mismatch && <span className="ag-cables__warning">{t(mismatch.code, mismatch.vars)}</span>}
       </button>
       <PowerSwitch cable={cable} />
-      <button className="ag-panel__action" title={t("Настроить")} onClick={onEdit}>
+      <button className="ag-panel__action" title={t("cable_setup")} onClick={onEdit}>
         <Icon name="pencil" />
       </button>
-      <button className="ag-panel__action is-danger" title={t("Удалить")} onClick={onDelete}>
+      <button className="ag-panel__action is-danger" title={t("delete")} onClick={onDelete}>
         <Icon name="trash" />
       </button>
     </div>
   );
 }
 
-/** Раскрытый кабель: имя и два устройства. Всё сохраняется сразу, ✓ только сворачивает. */
+/** An expanded cable: name and two devices. Everything is saved at once, ✓ only collapses it. */
 function CableEditor({ cable, onDone }: { cable: Cable; onDone: () => void }) {
   const update = useCables((s) => s.update);
   const cables = useCables((s) => s.cables);
   const t = useT();
-  // устройства, уже взятые другими кабелями, подписываем, чтобы не собрать два кабеля из одного устройства
+  // devices already taken by other cables are labeled, so two cables aren't built from one device
   const taken = useMemo(() => {
     const owners = cableDeviceOwners(cables.filter((c) => c.id !== cable.id));
-    return new Map([...owners].map(([id, name]) => [id, t("в кабеле «{name}»", { name })]));
+    return new Map([...owners].map(([id, name]) => [id, t("device_in_cable", { name })]));
   }, [cables, cable.id, t]);
   const draft = useRef(cable.name);
   const cancelled = useRef(false);
@@ -133,7 +150,7 @@ function CableEditor({ cable, onDone }: { cable: Cable; onDone: () => void }) {
     if (current && name && name !== current.name) useCables.getState().update(cable.id, { name });
   };
 
-  // панель могут закрыть кликом мимо, поле при этом просто исчезнет — имя сохраняем при размонтировании
+  // the panel can be closed by a click outside, and the field just disappears: save the name on unmount
   useEffect(() => () => commitName(), []);
 
   return (
@@ -153,7 +170,7 @@ function CableEditor({ cable, onDone }: { cable: Cable; onDone: () => void }) {
               onDone();
             }
             if (e.key === "Escape") {
-              // Escape отменяет правку имени и сворачивает кабель, а не закрывает панель
+              // Escape cancels the name edit and collapses the cable instead of closing the panel
               e.stopPropagation();
               cancelled.current = true;
               onDone();
@@ -162,8 +179,8 @@ function CableEditor({ cable, onDone }: { cable: Cable; onDone: () => void }) {
         />
         <button
           className="ag-panel__action is-confirm"
-          title={t("Готово")}
-          // без этого поле потеряет фокус раньше клика
+          title={t("done")}
+          // without this the field loses focus before the click
           onMouseDown={(e) => e.preventDefault()}
           onClick={() => {
             commitName();
@@ -175,7 +192,7 @@ function CableEditor({ cable, onDone }: { cable: Cable; onDone: () => void }) {
       </div>
 
       <div className="ag-cables__field">
-        {t("Вход")} <span>{t("— устройство вывода, в него играют приложения")}</span>
+        {t("cable_in")} <span>{t("cable_in_description")}</span>
       </div>
       <DevicePicker
         flow="render"
@@ -186,7 +203,7 @@ function CableEditor({ cable, onDone }: { cable: Cable; onDone: () => void }) {
       />
 
       <div className="ag-cables__field">
-        {t("Выход")} <span>{t("— устройство ввода, с него забирается звук")}</span>
+        {t("cable_out")} <span>{t("cable_out_description")}</span>
       </div>
       <DevicePicker
         flow="capture"
@@ -199,31 +216,52 @@ function CableEditor({ cable, onDone }: { cable: Cable; onDone: () => void }) {
   );
 }
 
-/** Кабели в шапке: список, добавление, настройка и удаление */
+/** Cables in the header: list, adding, setup and removal */
 export function CableMenu() {
   const cables = useCables((s) => s.cables);
   const create = useCables((s) => s.create);
   const remove = useCables((s) => s.remove);
+  const reorder = useCables((s) => s.reorder);
   const open = useCablePanel((s) => s.open);
   const editing = useCablePanel((s) => s.editing);
   const { show, hide, edit } = useCablePanel.getState();
   const [confirming, setConfirming] = useState<string | null>(null);
+  // the result of the last cable search: names of the added cables, null before a search
+  const [found, setFound] = useState<string[] | null>(null);
+  const [searching, setSearching] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const t = useT();
+  const sortable = useSortable(
+    cables.map((c) => c.id),
+    reorder,
+  );
+
+  const findCables = async () => {
+    setSearching(true);
+    try {
+      await useDevices.getState().refresh();
+      const added = newFoundCables(useCables.getState().cables, useDevices.getState().devices);
+      for (const cable of added) await create(cable.name, cable.sides);
+      setFound(added.map((c) => c.name));
+    } finally {
+      setSearching(false);
+    }
+  };
 
   useEffect(() => {
     if (!open) {
       setConfirming(null);
+      setFound(null);
       return;
     }
     const onDown = (e: PointerEvent) => {
       const target = e.target as Element;
-      // выпадающий список устройств рисуется отдельно от панели, но относится к ней
+      // the device dropdown is rendered apart from the panel but belongs to it
       if (root.current?.contains(target) || target.closest?.(".ag-popover")) return;
       hide();
     };
     const onKey = (e: KeyboardEvent) => {
-      // первый Escape закрывает открытый список устройств, панель — только следующий
+      // the first Escape closes an open device list, only the next one closes the panel
       if (e.key === "Escape" && !document.querySelector(".ag-popover")) hide();
     };
     window.addEventListener("pointerdown", onDown);
@@ -236,11 +274,11 @@ export function CableMenu() {
 
   return (
     <div className="ag-cables" ref={root}>
-      <button className={`ag-header-btn${open ? " is-open" : ""}`} onClick={() => (open ? hide() : show())} title={t("Кабели")}>
+      <button className={`ag-header-btn${open ? " is-open" : ""}`} onClick={() => (open ? hide() : show())} title={t("cables")}>
         <span className="ag-cables__icon">
           <KindIcon kind="cable" />
         </span>
-        {t("Кабели")}
+        {t("cables")}
         {cables.length > 0 && <span className="ag-count">{cables.length}</span>}
         <Icon name="chevron" size={12} />
       </button>
@@ -248,47 +286,58 @@ export function CableMenu() {
       {open && (
         <div className="ag-panel ag-cables__panel">
           {cables.length > 0 && <BulkPower cables={cables} />}
-          <div className="ag-panel__list">
+          <div className={`ag-panel__list${sortable.dragging ? " is-sorting" : ""}`}>
             {cables.length === 0 && (
               <div className="ag-cables__empty">
                 {t(
-                  "Кабелей пока нет. Кабель — это пара устройств: устройство вывода, в которое играют приложения, и устройство ввода, с которого забирается звук.",
+                  "cables_empty",
                 )}
               </div>
             )}
-            {cables.map((c) =>
-              editing === c.id ? (
-                <CableEditor key={c.id} cable={c} onDone={() => edit(null)} />
-              ) : confirming === c.id ? (
-                <div key={c.id} className="ag-panel__row is-confirm">
-                  <span className="ag-panel__confirm-text">{t("Удалить «{name}»?", { name: c.name })}</span>
-                  <button
-                    className="ag-panel__small is-danger"
-                    onClick={() => {
-                      remove(c.id);
+            {cables.map((c) => (
+              <div
+                key={c.id}
+                ref={sortable.row(c.id)}
+                className={`ag-sortable${sortable.dragging === c.id ? " is-dragging" : ""}`}
+                style={sortable.style(c.id)}
+              >
+                {editing === c.id ? (
+                  <CableEditor cable={c} onDone={() => edit(null)} />
+                ) : confirming === c.id ? (
+                  <div className="ag-panel__row is-confirm">
+                    <span className="ag-panel__confirm-text">{t("delete_confirm", { name: c.name })}</span>
+                    <button
+                      className="ag-panel__small is-danger"
+                      onClick={() => {
+                        remove(c.id);
+                        setConfirming(null);
+                      }}
+                    >
+                      {t("delete")}
+                    </button>
+                    <button className="ag-panel__small" onClick={() => setConfirming(null)}>
+                      {t("cancel")}
+                    </button>
+                  </div>
+                ) : (
+                  <CableRow
+                    cable={c}
+                    onEdit={() => {
                       setConfirming(null);
+                      edit(c.id);
                     }}
-                  >
-                    {t("Удалить")}
-                  </button>
-                  <button className="ag-panel__small" onClick={() => setConfirming(null)}>
-                    {t("Отмена")}
-                  </button>
-                </div>
-              ) : (
-                <CableRow
-                  key={c.id}
-                  cable={c}
-                  onEdit={() => {
-                    setConfirming(null);
-                    edit(c.id);
-                  }}
-                  onDelete={() => setConfirming(c.id)}
-                />
-              ),
-            )}
+                    onDelete={() => setConfirming(c.id)}
+                    grip={
+                      <span className="ag-panel__grip" title={t("drag_to_reorder")} {...sortable.handle(c.id)}>
+                        <Icon name="grip" />
+                      </span>
+                    }
+                  />
+                )}
+              </div>
+            ))}
           </div>
-          <div className="ag-panel__footer">
+          <div className="ag-panel__footer is-column">
             <button
               className="ag-panel__add"
               onClick={async () => {
@@ -297,8 +346,17 @@ export function CableMenu() {
               }}
             >
               <Icon name="plus" />
-              {t("Новый кабель")}
+              {t("new_cable")}
             </button>
+            <button className="ag-panel__add" disabled={searching} title={t("find_cables_hint")} onClick={findCables}>
+              <Icon name="search" />
+              {t("find_cables")}
+            </button>
+            {found && (
+              <div className="ag-cables__found">
+                {found.length > 0 ? t("cables_found", { names: found.join(", ") }) : t("cables_found_none")}
+              </div>
+            )}
           </div>
         </div>
       )}

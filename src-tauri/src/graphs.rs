@@ -1,4 +1,4 @@
-//! Хранилище графов: каждый граф — отдельный JSON-файл в папке данных приложения.
+//! Graph storage: every graph is a separate JSON file in the app's data folder.
 
 use crate::engine::Engine;
 use crate::storage::{check_id, clean_name, err, now_ms, write_atomic, CmdResult};
@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::State;
 
-/// Версия формата файла графа. Повышается при несовместимых изменениях.
+/// Graph file format version. Raised on incompatible changes.
 const FORMAT_VERSION: u32 = 1;
 
 fn format_version() -> u32 {
@@ -31,7 +31,7 @@ pub enum NodeKind {
     Output,
     App,
     Cable,
-    /// Устройства по умолчанию в Windows
+    /// The system's default devices
     System,
 }
 
@@ -48,25 +48,25 @@ pub struct Viewport {
     pub zoom: f64,
 }
 
-/// Привязка порта ноды к системному устройству
+/// A node port's binding to a system device
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DeviceRef {
-    /// Устройство по умолчанию: следует за его сменой в системе
+    /// The default device: follows its changes in the system
     Default,
-    /// Конкретное устройство. Имя запоминается, чтобы показывать его, пока устройство отключено
+    /// A specific device. The name is remembered to show it while the device is unplugged
     Device { id: String, name: String },
 }
 
-/// Приложение, которое представляет нода приложения
+/// The app an app node stands for
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct AppRef {
-    /// Имя исполняемого файла: по нему приложение узнаётся, даже если сменилась папка
+    /// Executable file name: the app is recognized by it even if its folder changed
     pub exe: String,
-    /// Полный путь, под которым приложение было выбрано
+    /// The full path the app was chosen under
     #[serde(default)]
     pub path: String,
-    /// Название, чтобы показывать его, пока приложение не запущено
+    /// The name, shown while the app isn't running
     pub name: String,
 }
 
@@ -75,19 +75,19 @@ pub struct GraphNode {
     pub id: String,
     pub kind: NodeKind,
     pub label: String,
-    /// Устройство вывода за входным портом: в него пишется звук (вывод)
+    /// The output device behind the input port: sound is written into it (output)
     #[serde(default)]
     pub sink: Option<DeviceRef>,
-    /// Устройство записи за выходным портом: из него берётся звук (ввод)
+    /// The recording device behind the output port: sound is taken from it (input)
     #[serde(default)]
     pub source: Option<DeviceRef>,
-    /// Кабель из общего списка (cables.rs), который представляет нода кабеля; нет — внутренний
+    /// The cable from the shared list (cables.rs) a cable node stands for; none means internal
     #[serde(default)]
     pub cable: Option<String>,
-    /// Приложение, которое представляет нода приложения
+    /// The app an app node stands for
     #[serde(default)]
     pub app: Option<AppRef>,
-    /// Громкость: 1 — без изменений, 0 — тишина, больше 1 — усиление (только в потоках движка)
+    /// Volume: 1 is unchanged, 0 is silence, above 1 is gain (engine streams only)
     #[serde(default = "full_volume")]
     pub volume: f32,
     pub position: Position,
@@ -115,12 +115,12 @@ pub struct Graph {
     pub nodes: Vec<GraphNode>,
     #[serde(default)]
     pub edges: Vec<GraphEdge>,
-    /// Регуляторы громкости на нодах этого графа
+    /// Volume sliders on this graph's nodes
     #[serde(default = "yes")]
     pub show_volume: bool,
 }
 
-/// Краткие сведения о графе для списка
+/// A short summary of a graph for the list
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphMeta {
@@ -148,6 +148,9 @@ impl From<&Graph> for GraphMeta {
 struct Settings {
     #[serde(default)]
     last_opened: Option<String>,
+    /// Graph ids in the order of the list, as the user arranged it; graphs not in it go last
+    #[serde(default)]
+    graph_order: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -160,7 +163,7 @@ pub struct LibraryInfo {
 pub struct GraphStore {
     graphs_dir: PathBuf,
     settings_path: PathBuf,
-    // команды Tauri выполняются параллельно, запись в файлы сериализуем
+    // Tauri commands run in parallel, file writes are serialized
     lock: Mutex<()>,
 }
 
@@ -179,7 +182,7 @@ impl GraphStore {
         self.graphs_dir.join(format!("{id}.json"))
     }
 
-    /// Граф с диска для движка
+    /// A graph from disk for the engine
     pub fn load(&self, id: &str) -> CmdResult<Graph> {
         let _guard = self.lock.lock().map_err(err)?;
         self.read(id)
@@ -218,15 +221,27 @@ impl GraphStore {
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
-            // повреждённый файл не должен ломать весь список
+            // a damaged file must not break the whole list
             match fs::read_to_string(&path).map_err(err).and_then(|t| serde_json::from_str::<Graph>(&t).map_err(err)) {
                 Ok(g) => graphs.push(GraphMeta::from(&g)),
-                Err(e) => eprintln!("пропущен файл графа {}: {e}", path.display()),
+                Err(e) => eprintln!("skipped graph file {}: {e}", path.display()),
             }
         }
-        graphs.sort_by_key(|g| g.created_at);
+        let order = self.settings().graph_order;
+        let place = |id: &str| order.iter().position(|o| o == id).unwrap_or(usize::MAX);
+        graphs.sort_by_key(|g| (place(&g.id), g.created_at));
         Ok(graphs)
     }
+}
+
+/// Remembers the order of the graph list
+#[tauri::command]
+pub fn graphs_reorder(store: State<GraphStore>, ids: Vec<String>) -> CmdResult<()> {
+    let _guard = store.lock.lock().map_err(err)?;
+    let mut s = store.settings();
+    s.graph_order = ids;
+    let json = serde_json::to_vec_pretty(&s).map_err(err)?;
+    write_atomic(&store.settings_path, &json).map_err(err)
 }
 
 #[tauri::command]
@@ -278,10 +293,10 @@ pub fn graph_create(
 #[tauri::command]
 pub fn graph_save(store: State<GraphStore>, engine: State<Engine>, mut graph: Graph) -> CmdResult<GraphMeta> {
     let _guard = store.lock.lock().map_err(err)?;
-    // граф могли удалить, пока висело отложенное сохранение: не воскрешаем его
+    // the graph may have been deleted while a save was pending: don't bring it back
     check_id(&graph.id)?;
     if !store.path(&graph.id).exists() {
-        return Err(tr!("граф уже удалён"));
+        return Err(tr!("error_graph_deleted"));
     }
     graph.version = FORMAT_VERSION;
     graph.name = clean_name(&graph.name)?;
@@ -302,7 +317,7 @@ pub fn graph_rename(store: State<GraphStore>, engine: State<Engine>, id: String,
     Ok(GraphMeta::from(&graph))
 }
 
-/// Регуляторы громкости графа, который не открыт в окне (открытый сохраняется целиком)
+/// Volume sliders of a graph not open in the window (the open one is saved whole)
 #[tauri::command]
 pub fn graph_set_show_volume(store: State<GraphStore>, engine: State<Engine>, id: String, show: bool) -> CmdResult<GraphMeta> {
     let _guard = store.lock.lock().map_err(err)?;

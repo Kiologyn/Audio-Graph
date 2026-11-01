@@ -7,7 +7,7 @@ src-tauri/gen/schemas/
 
 .vscode/*
 !.vscode/extensions.json
-portable/
+release/
 
-# личные настройки Claude Code
+# personal Claude Code settings
 .claude/settings.local.json

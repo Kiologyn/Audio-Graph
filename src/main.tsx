@@ -3,18 +3,17 @@ import { createRoot } from "react-dom/client";
 import "@xyflow/react/dist/style.css";
 import "./styles.css";
 import App from "./App";
+import { loadPlatform } from "./platform";
 import { useSettings, watchSettings } from "./settings";
 
-// меню браузера (Назад, Обновить, Печать…) приложению не нужно; в полях ввода оставлено копирование и вставка
+// the app doesn't need the browser menu (Back, Refresh, Print…); text fields keep copy and paste
 window.addEventListener("contextmenu", (e) => {
   const target = e.target as HTMLElement;
   if (!target.closest("input:not([type]), input[type=text], textarea, [contenteditable]")) e.preventDefault();
 });
 
-// тема и язык известны до первой отрисовки: без мелькания чужой темы и языка
-useSettings
-  .getState()
-  .load()
+// theme, language and platform are known before the first render: no flash of a wrong theme or language
+Promise.all([useSettings.getState().load(), loadPlatform()])
   .finally(() => {
     watchSettings();
     createRoot(document.getElementById("root")!).render(

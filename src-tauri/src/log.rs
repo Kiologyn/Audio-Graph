@@ -1,5 +1,5 @@
-//! Журнал для разбора сбоев: <папка данных>/logs/audio-graph.log. Пишутся запуск, версия Windows,
-//! запуск и остановка графа, ошибки движка и падения. Больше 1 МБ — старый журнал уходит в .old.
+//! Log for troubleshooting: <data folder>/logs/audio-graph.log. It records startup, the OS version,
+//! graph start and stop, engine errors and panics. Over 1 MB the old log moves to .old.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -10,7 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 static FILE: OnceLock<Mutex<PathBuf>> = OnceLock::new();
 const MAX_SIZE: u64 = 1024 * 1024;
 
-pub fn init(data_dir: &Path) {
+/// version: the app version (package.json through tauri.conf.json)
+pub fn init(data_dir: &Path, version: &str) {
     let dir = data_dir.join("logs");
     let _ = fs::create_dir_all(&dir);
     let path = dir.join("audio-graph.log");
@@ -19,14 +20,14 @@ pub fn init(data_dir: &Path) {
     }
     let _ = FILE.set(Mutex::new(path));
 
-    // падения тоже в журнал: без консоли их иначе не увидеть
+    // panics go to the log too: without a console they'd be invisible
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        write(format!("ПАДЕНИЕ: {info}"));
+        write(format!("PANIC: {info}"));
         default_hook(info);
     }));
 
-    write(format!("--- Audio Graph {} запущен, {}", env!("CARGO_PKG_VERSION"), windows_version()));
+    write(format!("--- Audio Graph {version} started, {}", system_version()));
 }
 
 pub fn write(line: impl AsRef<str>) {
@@ -37,11 +38,11 @@ pub fn write(line: impl AsRef<str>) {
     }
 }
 
-/// Время UTC в виде 2026-10-31 20:15:07
+/// UTC time as 2026-10-31 20:15:07
 fn timestamp() -> String {
     let secs = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()) as i64;
     let (days, rest) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
-    // дни от 1970-01-01 в дату (алгоритм Хиннанта)
+    // days since 1970-01-01 to a date (Hinnant's algorithm)
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z - era * 146_097;
@@ -55,7 +56,7 @@ fn timestamp() -> String {
 }
 
 #[cfg(windows)]
-fn windows_version() -> String {
+fn system_version() -> String {
     use windows::core::{w, PCWSTR};
     use windows::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ};
     let read = |name: PCWSTR| -> Option<String> {
@@ -68,16 +69,30 @@ fn windows_version() -> String {
         let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
         Some(String::from_utf16_lossy(&buf[..len]))
     };
-    // ProductName у Windows 11 по-прежнему говорит «Windows 10», точнее — номер сборки
+    // Windows 11 still says "Windows 10" in ProductName, the build number is more exact
     format!(
-        "{} {}, сборка {}",
+        "{} {}, build {}",
         read(w!("ProductName")).unwrap_or_default(),
         read(w!("DisplayVersion")).unwrap_or_default(),
         read(w!("CurrentBuild")).unwrap_or_default()
     )
 }
 
-#[cfg(not(windows))]
-fn windows_version() -> String {
+/// Distribution, kernel and audio server: the engine's behavior depends on the server (PulseAudio or PipeWire)
+#[cfg(target_os = "linux")]
+fn system_version() -> String {
+    let distro = fs::read_to_string("/etc/os-release")
+        .ok()
+        .and_then(|t| t.lines().find_map(|l| l.strip_prefix("PRETTY_NAME=").map(|v| v.trim_matches('"').to_string())))
+        .unwrap_or_else(|| "Linux".into());
+    let kernel = fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
+    let server = crate::pulse::Pulse::connect("Audio Graph")
+        .and_then(|mut p| p.server())
+        .map_or_else(|e| format!("audio server unavailable: {e}"), |s| format!("{} {}", s.name, s.version));
+    format!("{distro}, kernel {}, {server}", kernel.trim())
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+fn system_version() -> String {
     std::env::consts::OS.to_string()
 }

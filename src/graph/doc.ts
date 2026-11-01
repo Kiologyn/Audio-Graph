@@ -1,7 +1,7 @@
 import type { Viewport } from "@xyflow/react";
 import { NODE_KINDS, type AudioEdge, type AudioNode, type AudioNodeKind, type AppRef, type DeviceRef } from "./types";
 
-/** Формат графа в файле. Совпадает с graphs.rs, не зависит от React Flow. */
+/** The graph file format. Matches graphs.rs, independent of React Flow. */
 export type GraphDoc = {
   version: number;
   id: string;
@@ -11,7 +11,7 @@ export type GraphDoc = {
   viewport: Viewport | null;
   nodes: DocNode[];
   edges: DocEdge[];
-  /** Регуляторы громкости на нодах */
+  /** Volume sliders on nodes */
   showVolume: boolean;
 };
 
@@ -34,8 +34,8 @@ export type GraphMeta = Pick<GraphDoc, "id" | "name" | "createdAt" | "updatedAt"
 export function nodesToDoc(nodes: AudioNode[]): DocNode[] {
   return nodes.map((n) => {
     const meta = NODE_KINDS[n.data.kind];
-    // сохраняем только то, что нода этого вида умеет выбирать: у нод из старых сохранений
-    // этих полей может не быть, а у кабелей остались устройства от прежней схемы
+    // save only what a node of this kind can choose: nodes from old saves
+    // may lack these fields, and cables kept devices from the former scheme
     return {
       id: n.id,
       kind: n.data.kind,

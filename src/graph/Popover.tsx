@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { t } from "../i18n";
 import { Icon } from "./icons";
 
-/** Кнопка с текущим выбором, открывающая выпадающий список */
+/** A button with the current choice that opens a dropdown */
 export function PickerChip({
   ref,
   text,
@@ -17,11 +17,11 @@ export function PickerChip({
   ref?: Ref<HTMLButtonElement>;
   text: string;
   title?: string;
-  /** ничего не выбрано: текст-заглушка */
+  /** nothing chosen: placeholder text */
   empty?: boolean;
-  /** выбранное недоступно: устройства нет в системе или кабель удалён */
+  /** the choice is unavailable: the device is missing or the cable was removed */
   missing?: boolean;
-  /** выбранное выключено в системе */
+  /** the choice is turned off in the system */
   off?: boolean;
   open: boolean;
   onClick: () => void;
@@ -61,8 +61,8 @@ export function PopoverItem({
 }
 
 /**
- * Выпадающий список у кнопки-якоря. Рисуется поверх всего приложения (портал),
- * поэтому не масштабируется вместе с холстом и не прячется под нодами.
+ * A dropdown at an anchor button. Rendered above the whole app (portal),
+ * so it doesn't scale with the canvas or hide under nodes.
  */
 export function Popover({
   anchor,
@@ -72,7 +72,7 @@ export function Popover({
   children,
 }: {
   anchor: RefObject<HTMLElement | null>;
-  /** идёт обновление списка */
+  /** the list is refreshing */
   busy?: boolean;
   footer?: ReactNode;
   onClose: () => void;
@@ -80,12 +80,12 @@ export function Popover({
 }) {
   const menu = useRef<HTMLDivElement>(null);
   const [style, setStyle] = useState<CSSProperties>({ visibility: "hidden" });
-  // обработчики подписываются один раз, а onClose каждый раз новый
+  // handlers subscribe once, while onClose is new every time
   const close = useRef(onClose);
   close.current = onClose;
 
-  // под якорем, а если снизу мало места — над ним; не вылезать за правый край.
-  // Ширина меняется, когда приходит обновлённый список, поэтому следим за размером.
+  // below the anchor, or above it if there is little room below; never past the right edge.
+  // The width changes when the refreshed list arrives, so the size is observed.
   useLayoutEffect(() => {
     const el = menu.current;
     if (!el) return;
@@ -111,7 +111,7 @@ export function Popover({
     return () => observer.disconnect();
   }, [anchor]);
 
-  // закрывать по клику мимо, Escape, прокрутке/зуму холста и изменению размера окна
+  // close on a click outside, Escape, canvas scroll/zoom and window resize
   useEffect(() => {
     const inside = (e: Event) =>
       menu.current?.contains(e.target as Node) || anchor.current?.contains(e.target as Node);
@@ -133,7 +133,7 @@ export function Popover({
 
   return createPortal(
     <div className="ag-popover" ref={menu} style={style}>
-      {busy && <span className="ag-spinner ag-popover__spinner" aria-label={t("Обновление")} />}
+      {busy && <span className="ag-spinner ag-popover__spinner" aria-label={t("refreshing")} />}
       <div className="ag-popover__list">{children}</div>
       {footer && <div className="ag-popover__footer">{footer}</div>}
     </div>,

@@ -1,4 +1,4 @@
-// в релизной сборке не открывать консольное окно на Windows
+// don't open a console window on Windows in release builds
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {

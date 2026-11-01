@@ -1,11 +1,12 @@
 [package]
 name = "audio-graph"
-version = "1.0.0"
-description = "Audio Graph: маршрутизация звука графом"
+# the app version lives in package.json (tauri.conf.json reads it from there): change it with npm version
+version = "0.0.0"
+description = "Audio Graph: route audio by drawing a graph"
 edition = "2021"
 
 [lib]
-# суффикс _lib нужен, чтобы имя библиотеки не конфликтовало с бинарником на Windows
+# the _lib suffix keeps the library name from clashing with the binary on Windows
 name = "audio_graph_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
@@ -17,6 +18,13 @@ tauri = { version = "2", features = ["tray-icon"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1.29.0", features = ["v4"] }
+# a second launch shows the first one's window: two engines would interfere, and without a tray
+# (GNOME without an extension) a hidden window couldn't be brought back otherwise
+tauri-plugin-single-instance = "2"
+
+[target."cfg(target_os = \"linux\")".dependencies]
+# the Linux audio server: PulseAudio or PipeWire (through pipewire-pulse)
+libpulse-binding = "2"
 
 [target."cfg(windows)".dependencies]
 windows = { version = "0.62.2", features = ["Win32_Media_Audio", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_Devices_FunctionDiscovery", "Win32_UI_Shell_PropertiesSystem", "Win32_Foundation", "Win32_System_Variant", "Win32_System_Threading", "Win32_Storage_FileSystem", "Win32_UI_WindowsAndMessaging", "Win32_Graphics_Dwm", "Win32_System_WinRT", "Win32_System_Diagnostics_ToolHelp", "Win32_Security", "Win32_System_Registry", "Win32_Globalization"] }

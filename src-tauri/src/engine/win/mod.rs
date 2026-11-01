@@ -1,4 +1,4 @@
-//! Движок на Windows: потоки WASAPI и устройства приложений.
+//! The engine on Windows: WASAPI streams and app devices.
 
 mod router;
 mod streams;

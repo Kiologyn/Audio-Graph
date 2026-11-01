@@ -1,10 +1,12 @@
+import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { LANGUAGES, useT } from "../i18n";
+import { dynamicCables, platform } from "../platform";
 import { useSettings, type Lang, type Theme } from "../settings";
 import { Icon } from "./icons";
 import { PickerChip, Popover, PopoverItem } from "./Popover";
 
-/** Переключатель из нескольких вариантов */
+/** A switch between several options */
 function Segmented<T extends string>({
   value,
   options,
@@ -31,7 +33,7 @@ function Segmented<T extends string>({
   );
 }
 
-/** Выбор языка: названия языков — на самих языках, подсказка — по-английски */
+/** Language choice: language names in the languages themselves, the hint in English */
 function LanguagePicker({ value, onChange }: { value: Lang; onChange: (language: Lang) => void }) {
   const anchor = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
@@ -59,7 +61,7 @@ function LanguagePicker({ value, onChange }: { value: Lang; onChange: (language:
   );
 }
 
-/** Настройки в шапке слева: тема, язык, поведение кабелей и холста */
+/** Settings on the left of the header: theme, language, cable and canvas behavior */
 export function SettingsMenu() {
   const theme = useSettings((s) => s.theme);
   const language = useSettings((s) => s.language);
@@ -75,11 +77,11 @@ export function SettingsMenu() {
     if (!open) return;
     const onDown = (e: PointerEvent) => {
       const target = e.target as Element;
-      // список языков рисуется отдельно от панели, но относится к ней
+      // the language list is rendered apart from the panel but belongs to it
       if (root.current?.contains(target) || target.closest?.(".ag-popover")) return;
       setOpen(false);
     };
-    // первый Escape закрывает открытый список языков, панель — только следующий
+    // the first Escape closes an open language list, only the next one closes the panel
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && !document.querySelector(".ag-popover") && setOpen(false);
     window.addEventListener("pointerdown", onDown);
     window.addEventListener("keydown", onKey);
@@ -94,7 +96,7 @@ export function SettingsMenu() {
       <button
         className={`ag-header-btn ag-header-btn--icon${open ? " is-open" : ""}`}
         onClick={() => setOpen(!open)}
-        title={t("Настройки")}
+        title={t("settings")}
       >
         <Icon name="settings" size={16} />
       </button>
@@ -102,41 +104,42 @@ export function SettingsMenu() {
       {open && (
         <div className="ag-panel ag-settings__panel">
           <div className="ag-settings__field">
-            <span className="ag-settings__label">{t("Тема")}</span>
+            <span className="ag-settings__label">{t("settings_theme")}</span>
             <Segmented<Theme>
               value={theme}
               onChange={(theme) => set({ theme })}
               options={[
-                { value: "light", label: t("Светлая") },
-                { value: "system", label: t("Системная") },
-                { value: "dark", label: t("Тёмная") },
+                { value: "light", label: t("settings_theme_light") },
+                { value: "system", label: t("settings_theme_auto") },
+                { value: "dark", label: t("settings_theme_dark") },
               ]}
             />
           </div>
           <div className="ag-settings__field">
-            <span className="ag-settings__label">{t("Язык")}</span>
+            <span className="ag-settings__label">{t("settings_language")}</span>
             <LanguagePicker value={language} onChange={(language) => set({ language })} />
           </div>
-          <label className="ag-settings__check">
+          {/* Linux virtual cables exist only while the graph runs anyway */}
+          {!dynamicCables() && <label className="ag-settings__check">
             <input
               type="checkbox"
               checked={disableIdleCables}
               onChange={(e) => set({ disableIdleCables: e.currentTarget.checked })}
             />
             <span>
-              {t("Выключать кабели, когда граф остановлен")}
+              {t("settings_disable_idle_cables")}
               <small>
                 {t(
-                  "Кабели запущенного графа включаются при его запуске и выключаются после остановки и при выходе из программы",
+                  "settings_disable_idle_cables_hint",
                 )}
               </small>
             </span>
-          </label>
+          </label>}
           <label className="ag-settings__check">
             <input type="checkbox" checked={hideMinimap} onChange={(e) => set({ hideMinimap: e.currentTarget.checked })} />
             <span>
-              {t("Убрать карту графа")}
-              <small>{t("Уменьшенный вид всего графа в правом нижнем углу")}</small>
+              {t("settings_hide_minimap")}
+              <small>{t("settings_hide_minimap_hint")}</small>
             </span>
           </label>
           <label className="ag-settings__check">
@@ -146,10 +149,17 @@ export function SettingsMenu() {
               onChange={(e) => set({ newGraphVolume: e.currentTarget.checked })}
             />
             <span>
-              {t("Регуляторы громкости в новых графах")}
-              <small>{t("С какой галочкой громкости создаётся граф; потом её можно сменить в списке графов")}</small>
+              {t("settings_new_graph_volume")}
+              <small>{t("settings_new_graph_volume_hint")}</small>
             </span>
           </label>
+          {/* on Linux the tray icon isn't shown everywhere (GNOME without an extension), and quitting is in its menu */}
+          {platform() === "linux" && (
+            <button className="ag-settings__quit" onClick={() => invoke("app_quit")}>
+              {t("quit_app")}
+              <small>{t("quit_app_hint")}</small>
+            </button>
+          )}
         </div>
       )}
     </div>

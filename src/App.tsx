@@ -9,6 +9,7 @@ import { GraphMenu } from "./graph/GraphMenu";
 import { useLibrary } from "./graph/library";
 import { RunControl } from "./graph/RunControl";
 import { SettingsMenu } from "./graph/SettingsMenu";
+import { dynamicCables } from "./platform";
 import { useGraph } from "./graph/store";
 import { useT } from "./i18n";
 import { useSettings } from "./settings";
@@ -22,13 +23,13 @@ function SaveIndicator() {
   const settingsError = useSettings((s) => s.error);
   const t = useT();
   const fail = (text: string) => <span className="ag-save is-error">{text}</span>;
-  if (toggleError) return fail(t("Не удалось переключить устройство: {error}", { error: toggleError }));
-  if (cablesError) return fail(t("Не удалось сохранить кабели: {error}", { error: cablesError }));
-  if (settingsError) return fail(t("Не удалось сохранить настройки: {error}", { error: settingsError }));
+  if (toggleError) return fail(t("error_switch_device", { error: toggleError }));
+  if (cablesError) return fail(t("error_save_cables", { error: cablesError }));
+  if (settingsError) return fail(t("error_save_settings", { error: settingsError }));
   if (!ready && status !== "error") return null;
-  if (status === "error") return fail(t("Не удалось сохранить: {error}", { error: error ?? "" }));
-  if (status === "saved") return <span className="ag-save">{t("Сохранено")}</span>;
-  return <span className="ag-save">{t("Сохранение…")}</span>;
+  if (status === "error") return fail(t("error_save", { error: error ?? "" }));
+  if (status === "saved") return <span className="ag-save">{t("saved")}</span>;
+  return <span className="ag-save">{t("saving")}</span>;
 }
 
 export default function App() {
@@ -37,7 +38,7 @@ export default function App() {
   useEffect(() => {
     useLibrary.getState().init();
     useCables.getState().load();
-    // список устройств нужен сразу: по нему видно, какие выбранные устройства сейчас недоступны
+    // the device list is needed right away: it shows which chosen devices are unavailable now
     useDevices.getState().refresh();
     useEngine.getState().init();
   }, []);
@@ -47,11 +48,12 @@ export default function App() {
       <header className="ag-toolbar">
         <SettingsMenu />
         <GraphMenu />
-        <CableMenu />
+        {/* on Linux the graph creates its cables itself: there is no shared list */}
+        {!dynamicCables() && <CableMenu />}
         <RunControl />
       </header>
       {graphId ? (
-        // свой провайдер на каждый граф: холст, камера и выделение начинаются с чистого листа
+        // a provider per graph: the canvas, camera and selection start from scratch
         <ReactFlowProvider key={graphId}>
           <Canvas />
         </ReactFlowProvider>

@@ -9,7 +9,7 @@ import type { AudioEdge, AudioNode } from "./types";
 
 export type SaveStatus = "saved" | "pending" | "saving" | "error";
 
-/** Список графов и операции над ними. Открытый граф живёт в useGraph. */
+/** The graph list and operations on it. The open graph lives in useGraph. */
 type LibraryState = {
   ready: boolean;
   graphs: GraphMeta[];
@@ -21,12 +21,14 @@ type LibraryState = {
   rename: (id: string, name: string) => Promise<void>;
   setShowVolume: (id: string, show: boolean) => Promise<void>;
   remove: (id: string) => Promise<void>;
+  /** Puts the list in this order of graph ids */
+  reorder: (ids: string[]) => Promise<void>;
 };
 
-/** Пауза после последнего изменения перед записью на диск */
+/** Pause after the last change before writing to disk */
 const SAVE_DELAY_MS = 300;
 
-// ---------- автосохранение ----------
+// ---------- autosave ----------
 
 function snapshot(): GraphDoc | null {
   const { meta, viewport, nodes, edges } = useGraph.getState();
@@ -44,14 +46,14 @@ function snapshot(): GraphDoc | null {
   };
 }
 
-// Ключ содержимого: выделение, размеры нод и прочее временное в него не входят,
-// поэтому их изменения не вызывают сохранения
+// Content key: selection, node sizes and other transient state are not part of it,
+// so their changes don't trigger a save
 const contentKey = (doc: GraphDoc | null) =>
   doc ? JSON.stringify([doc.id, doc.name, doc.viewport, doc.nodes, doc.edges, doc.showVolume]) : "";
 
 let savedKey = "";
 let timer: ReturnType<typeof setTimeout> | undefined;
-// сохранения выполняются строго по очереди
+// saves run strictly in order
 let queue: Promise<void> = Promise.resolve();
 
 function markLoaded() {
@@ -77,7 +79,7 @@ async function saveNow() {
   }
 }
 
-/** Немедленно записать несохранённые изменения (перед сменой графа, при закрытии окна) */
+/** Write unsaved changes now (before switching graphs, when the window closes) */
 export function flushSave(): Promise<void> {
   clearTimeout(timer);
   timer = undefined;
@@ -86,7 +88,7 @@ export function flushSave(): Promise<void> {
 }
 
 useGraph.subscribe((state, prev) => {
-  // загрузка другого графа — не изменение
+  // loading another graph is not a change
   if (!state.meta || state.meta.id !== prev.meta?.id) return;
   if (contentKey(snapshot()) === savedKey) return;
   useLibrary.setState({ status: "pending" });
@@ -97,7 +99,7 @@ useGraph.subscribe((state, prev) => {
   }, SAVE_DELAY_MS);
 });
 
-// ---------- библиотека ----------
+// ---------- library ----------
 
 const metaOf = ({ id, name, createdAt, updatedAt, showVolume }: GraphDoc): GraphMeta => ({
   id,
@@ -107,7 +109,7 @@ const metaOf = ({ id, name, createdAt, updatedAt, showVolume }: GraphDoc): Graph
   showVolume,
 });
 
-/** Граф из старого автосохранения в localStorage (до появления файлов) */
+/** A graph from the old autosave in localStorage (before files existed) */
 const LEGACY_KEY = "audio-graph:canvas";
 function legacyGraph(): { nodes: AudioNode[]; edges: AudioEdge[] } | null {
   try {
@@ -123,13 +125,13 @@ function legacyGraph(): { nodes: AudioNode[]; edges: AudioEdge[] } | null {
 
 let initOnce: Promise<void> | null = null;
 
-// см. store.ts: при правке модуля в разработке — полная перезагрузка страницы
+// see store.ts: editing this module in development reloads the whole page
 import.meta.hot?.accept(() => location.reload());
 
 export const useLibrary = create<LibraryState>()((set, get) => {
   async function createFrom(name: string, nodes: AudioNode[], edges: AudioEdge[]): Promise<string> {
     await flushSave();
-    // галочка громкости у нового графа — как задано в настройках
+    // a new graph's volume checkbox is as set in the settings
     const showVolume = useSettings.getState().newGraphVolume;
     const doc = await graphsApi.create(name, nodesToDoc(nodes), edgesToDoc(edges), showVolume);
     set((s) => ({ graphs: [...s.graphs, metaOf(doc)] }));
@@ -152,7 +154,7 @@ export const useLibrary = create<LibraryState>()((set, get) => {
     status: "saved",
     error: null,
 
-    // StrictMode в разработке вызывает эффекты дважды, поэтому init идемпотентен
+    // StrictMode runs effects twice in development, so init is idempotent
     init: () =>
       (initOnce ??= guard(async () => {
         const { graphs, lastOpened } = await graphsApi.init();
@@ -160,14 +162,14 @@ export const useLibrary = create<LibraryState>()((set, get) => {
         if (graphs.length === 0) {
           const legacy = legacyGraph();
           if (legacy) {
-            await createFrom(t("Мой граф"), legacy.nodes, legacy.edges);
+            await createFrom(t("graph_default_name"), legacy.nodes, legacy.edges);
             try {
               localStorage.removeItem(LEGACY_KEY);
             } catch {
-              // не страшно: при следующем запуске графы уже будут в файлах
+              // not a problem: on the next start the graphs will already be in files
             }
           } else {
-            // первый запуск: готовые графы, открыт первый
+            // first start: ready-made graphs, the first one open
             const ids = [];
             for (const g of starterGraphs()) ids.push(await createFrom(g.name, g.nodes, g.edges));
             await get().open(ids[0]);
@@ -189,7 +191,7 @@ export const useLibrary = create<LibraryState>()((set, get) => {
 
     create: async () => {
       try {
-        return await createFrom(uniqueName(t("Новый граф"), get().graphs.map((g) => g.name)), [], []);
+        return await createFrom(uniqueName(t("new_graph"), get().graphs.map((g) => g.name)), [], []);
       } catch (e) {
         set({ status: "error", error: String(e) });
         return "";
@@ -201,7 +203,7 @@ export const useLibrary = create<LibraryState>()((set, get) => {
         const trimmed = name.trim();
         if (!trimmed) return;
         set((s) => ({ graphs: s.graphs.map((g) => (g.id === id ? { ...g, name: trimmed } : g)) }));
-        // открытый граф переименовываем через холст, его сохранит автосохранение
+        // the open graph is renamed through the canvas, autosave saves it
         if (useGraph.getState().meta?.id === id) useGraph.getState().setName(trimmed);
         else await graphsApi.rename(id, trimmed);
       }),
@@ -209,16 +211,23 @@ export const useLibrary = create<LibraryState>()((set, get) => {
     setShowVolume: (id, show) =>
       guard(async () => {
         set((s) => ({ graphs: s.graphs.map((g) => (g.id === id ? { ...g, showVolume: show } : g)) }));
-        // открытый граф сохранит автосохранение, остальные — отдельной командой
+        // autosave saves the open graph, the others go through a separate command
         if (useGraph.getState().meta?.id === id) useGraph.getState().setShowVolume(show);
         else await graphsApi.setShowVolume(id, show);
+      }),
+
+    reorder: (ids) =>
+      guard(async () => {
+        const byId = new Map(get().graphs.map((g) => [g.id, g]));
+        set({ graphs: ids.flatMap((id) => byId.get(id) ?? []) });
+        await graphsApi.reorder(ids);
       }),
 
     remove: (id) =>
       guard(async () => {
         const isOpen = useGraph.getState().meta?.id === id;
         if (isOpen) {
-          // отложенное сохранение удаляемого графа больше не нужно
+          // a pending save of the graph being deleted is no longer needed
           clearTimeout(timer);
           timer = undefined;
           await queue;
@@ -230,7 +239,7 @@ export const useLibrary = create<LibraryState>()((set, get) => {
           useGraph.getState().unload();
           savedKey = "";
           if (graphs.length > 0) await get().open(graphs[0].id);
-          else await createFrom(t("Новый граф"), [], []);
+          else await createFrom(t("new_graph"), [], []);
         }
       }),
   };

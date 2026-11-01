@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { DocEdge, DocNode, GraphDoc, GraphMeta } from "./doc";
 
-// обёртки над командами из src-tauri/src/graphs.rs
+// wrappers over the commands of src-tauri/src/graphs.rs
 
 export const graphsApi = {
   init: () => invoke<{ graphs: GraphMeta[]; lastOpened: string | null }>("graphs_init"),
@@ -12,4 +12,5 @@ export const graphsApi = {
   rename: (id: string, name: string) => invoke<GraphMeta>("graph_rename", { id, name }),
   setShowVolume: (id: string, show: boolean) => invoke<GraphMeta>("graph_set_show_volume", { id, show }),
   remove: (id: string) => invoke<void>("graph_delete", { id }),
+  reorder: (ids: string[]) => invoke<void>("graphs_reorder", { ids }),
 };

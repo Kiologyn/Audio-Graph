@@ -3,38 +3,44 @@ import { create } from "zustand";
 import { t } from "../i18n";
 import type { DeviceRef } from "./types";
 
-/** Совпадает с AudioDevice в src-tauri/src/devices/mod.rs */
+/** Matches AudioDevice in src-tauri/src/devices/mod.rs */
 export type AudioDevice = {
   id: string;
   name: string;
   flow: "render" | "capture";
-  /** disabled — выключено в настройках звука, его можно включить */
+  /** disabled: turned off in the sound settings, it can be turned on */
   state: "active" | "disabled";
   isDefault: boolean;
+  /** A cable device the graph created itself (Linux): nodes don't choose it */
+  isVirtual: boolean;
+  /** The other side of the virtual cable this device belongs to, found by driver properties (Windows) */
+  pair: string | null;
+  /** The name of that cable: "Line 1" */
+  pairName: string | null;
 };
 
 /**
- * Общий буфер списка устройств системы. Все выпадающие списки читают его,
- * а при открытии просят обновить: старый список виден сразу, новый подменяет его по готовности.
+ * Shared buffer of the system's device list. All dropdowns read it
+ * and ask to refresh it when opened: the old list shows at once, the new one replaces it when ready.
  */
 type DevicesState = {
   devices: AudioDevice[];
-  /** Список хотя бы раз получен; до этого нельзя судить, что устройство пропало */
+  /** The list was received at least once; before that a device can't be judged gone */
   loaded: boolean;
   loading: boolean;
   error: string | null;
-  /** Устройства, которые сейчас включаются или выключаются */
+  /** Devices being turned on or off right now */
   pending: string[];
-  /** Ошибка последнего включения или выключения */
+  /** The error of the last turning on or off */
   toggleError: string | null;
   refresh: () => Promise<void>;
   setEnabled: (ids: string[], enabled: boolean) => Promise<void>;
 };
 
-// одновременные запросы обновления склеиваются в один
+// concurrent refresh requests are merged into one
 let inflight: Promise<void> | null = null;
 
-// см. store.ts: при правке модуля в разработке — полная перезагрузка страницы
+// see store.ts: editing this module in development reloads the whole page
 import.meta.hot?.accept(() => location.reload());
 
 export const useDevices = create<DevicesState>()((set, get) => ({
@@ -50,7 +56,7 @@ export const useDevices = create<DevicesState>()((set, get) => ({
       set({ loading: true });
       try {
         const devices = await invoke<AudioDevice[]>("audio_devices");
-        // если ничего не поменялось, не трогаем массив, чтобы не перерисовывать ноды
+        // if nothing changed, keep the array so nodes don't re-render
         const same = JSON.stringify(devices) === JSON.stringify(get().devices);
         set({ ...(same ? {} : { devices }), loaded: true, error: null });
       } catch (e) {
@@ -64,7 +70,7 @@ export const useDevices = create<DevicesState>()((set, get) => ({
   setEnabled: async (ids, enabled) => {
     if (ids.length === 0) return;
     const state = enabled ? "active" : "disabled";
-    // переключатель отзывается сразу, а настоящее состояние приходит со следующим списком
+    // the switch responds at once, the real state comes with the next list
     set((s) => ({
       pending: [...s.pending, ...ids],
       devices: s.devices.map((d) => (ids.includes(d.id) ? { ...d, state } : d)),
@@ -76,7 +82,7 @@ export const useDevices = create<DevicesState>()((set, get) => ({
       set({ toggleError: String(e) });
     } finally {
       set((s) => ({ pending: s.pending.filter((id) => !ids.includes(id)) }));
-      // список, запрошенный до переключения, мог прийти со старыми состояниями
+      // a list requested before the switch may arrive with old states
       if (inflight) await inflight;
       await get().refresh();
     }
@@ -84,9 +90,9 @@ export const useDevices = create<DevicesState>()((set, get) => ({
 }));
 
 /**
- * Подпись выбранного устройства по буферу списка.
- * missing — устройство выбрано, но его нет в системе (отсоединено или удалено);
- * disabled — есть, но выключено.
+ * The label of the chosen device from the list buffer.
+ * missing: the device is chosen but the system doesn't have it (unplugged or removed);
+ * disabled: present but turned off.
  */
 export function describeDevice(
   ref: DeviceRef | null,
@@ -95,8 +101,8 @@ export function describeDevice(
   loaded: boolean,
 ): { text: string | null; missing: boolean; disabled: boolean } {
   if (!ref) return { text: null, missing: false, disabled: false };
-  if (ref.type === "default") return { text: t("По умолчанию"), missing: false, disabled: false };
+  if (ref.type === "default") return { text: t("device_default"), missing: false, disabled: false };
   const device = devices.find((d) => d.flow === flow && d.id === ref.id);
-  // пока устройство есть в системе, показываем его актуальное имя
+  // while the device exists in the system, show its current name
   return { text: device?.name ?? ref.name, missing: loaded && !device, disabled: device?.state === "disabled" };
 }

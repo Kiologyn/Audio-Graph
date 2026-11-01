@@ -1,19 +1,22 @@
-//! Разбор графа в план работы движка. Не зависит от платформы.
+//! Turns a graph into the engine's work plan. Platform-independent.
 //!
-//! Что выполняет система, а что сам движок:
-//! - связи приложения — это настройки Windows «устройство вывода/ввода приложения»: приложение
-//!   играет прямо в устройство ноды справа и слушает устройство ноды слева, движок звук не трогает;
-//! - остальные связи (ввод, вывод, кабели) — потоки движка: он читает устройства записи,
-//!   смешивает и играет в устройство вывода. Внутренний кабель — точка смешивания внутри движка;
-//! - связи ноды «Система» — устройства по умолчанию в Windows: её выход — звук приложений,
-//!   играющих в устройство вывода по умолчанию, вход — то, что они слышат как микрофон.
+//! What the system does and what the engine does itself:
+//! - an app's links are the system's per-app output/input device settings: the app
+//!   plays straight into the device of the node on its right and hears the node on its left, the engine doesn't touch the sound;
+//! - other links (input, output, cables) are engine streams: it reads recording devices,
+//!   mixes and plays into an output device. An internal cable is a mix point inside the engine;
+//! - links of the "System" node are the system default devices: its output is the sound of apps
+//!   playing into the default output device, its input is what they hear as the microphone.
+//!
+//! On Linux cables aren't chosen from a list: every cable node is a virtual device of its own,
+//! created while the graph runs (virtualize). The rest of the plan is the same.
 
 use crate::cables::Cable;
 use crate::graphs::{AppRef, DeviceRef, Graph, GraphEdge, GraphNode, NodeKind};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-/// То, что в графе нельзя выполнить. Остальная часть графа при этом работает.
+/// Something in the graph that can't be done. The rest of the graph still works.
 #[derive(Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Issue {
@@ -22,44 +25,44 @@ pub struct Issue {
     pub message: String,
 }
 
-/// Устройство, назначенное приложению
+/// A device assigned to an app
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Target {
-    /// Как у системы: снять с приложения отдельную настройку
+    /// Like the system: remove the app's own setting
     Default,
     Device(String),
 }
 
-/// Настройки Windows для одного приложения
+/// System settings for one app
 #[derive(Clone, Debug, PartialEq)]
 pub struct AppRoute {
     pub node: String,
     pub app: AppRef,
-    /// Куда приложение играет
+    /// Where the app plays
     pub render: Option<Target>,
-    /// Откуда приложение берёт микрофон
+    /// Where the app takes its microphone from
     pub capture: Option<Target>,
-    /// Громкость приложения в микшере Windows (не больше 1): нода приложения, а если оно
-    /// играет прямо в ноду вывода — ещё и её громкость
+    /// The app's volume in the system mixer (at most 1): the app node's, and if it
+    /// plays straight into an output node, that node's volume too
     pub volume: f32,
 }
 
-/// Устройство записи в потоке и громкость, с которой оно подмешивается
+/// A recording device in a stream and the volume it is mixed in with
 #[derive(Clone, Debug, PartialEq)]
 pub struct Source {
     pub device: String,
-    /// Произведение громкостей нод на пути: ввод или кабель, внутренние кабели, вывод
+    /// The product of node volumes along the path: input or cable, internal cables, output
     pub gain: f32,
 }
 
-/// Поток движка: звук устройств записи смешивается и играется в устройство вывода
+/// An engine stream: sound of recording devices is mixed and played into an output device
 #[derive(Clone, Debug, PartialEq)]
 pub struct Stream {
     pub sink: String,
     pub sources: Vec<Source>,
 }
 
-/// Устройства по умолчанию в Windows, которые назначает нода «Система»
+/// The system default devices the "System" node sets
 #[derive(Clone, Debug, PartialEq)]
 pub struct SystemRoute {
     pub node: String,
@@ -73,36 +76,99 @@ pub struct Plan {
     pub system: Option<SystemRoute>,
     pub streams: Vec<Stream>,
     pub issues: Vec<Issue>,
+    /// Virtual cable devices to create (Linux)
+    pub virtual_cables: Vec<VirtualCable>,
 }
 
-/// Текущие устройства по умолчанию в Windows: «по умолчанию» в нодах ввода и вывода движок
-/// открывает как конкретное устройство и переоткрывает, когда система его меняет.
-/// Если граф подменяет их нодой «Система», «по умолчанию» значит подменённое устройство
+/// A cable the graph creates itself: an output device (the cable's input) and an input device (its output)
+#[derive(Clone, Debug, PartialEq)]
+pub struct VirtualCable {
+    pub node: String,
+    /// The node's label: the system shows the devices under this name
+    pub label: String,
+    pub sink: String,
+    pub source: String,
+}
+
+/// The prefix of virtual device names: it tells them apart from the system's devices
+pub const VIRTUAL_PREFIX: &str = "audiograph.";
+
+/// A stream source "loopback:<output device>" is the sound played into that output device
+/// (WASAPI loopback). It stands in for the output of a cable that has only its input chosen
+pub const LOOPBACK_PREFIX: &str = "loopback:";
+
+/// The recording device the engine reads a cable's sound from: its output, or without one
+/// the loopback of its input. Apps can't listen to a loopback, only the engine can
+fn cable_source(cable: &Cable) -> Option<String> {
+    device_id(&cable.capture)
+        .map(str::to_string)
+        .or_else(|| device_id(&cable.render).map(|id| format!("{LOOPBACK_PREFIX}{id}")))
+}
+
+/// Device names of a node's virtual cable: the output device and the input device.
+/// Matches virtualDeviceIds in src/platform.ts
+pub fn virtual_device_names(node_id: &str) -> (String, String) {
+    // a device name allows only letters, digits, ".", "-" and "_"
+    let id: String = node_id.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').collect();
+    (format!("{VIRTUAL_PREFIX}{id}"), format!("{VIRTUAL_PREFIX}{id}.out"))
+}
+
+/// The graph with every cable node referring to its own virtual cable, these cables
+/// (for compile) and the devices to create for them
+pub fn virtualize(graph: &Graph) -> (Graph, Vec<Cable>, Vec<VirtualCable>) {
+    let mut graph = graph.clone();
+    let mut cables = Vec::new();
+    let mut devices = Vec::new();
+    for node in graph.nodes.iter_mut().filter(|n| n.kind == NodeKind::Cable) {
+        let (sink, source) = virtual_device_names(&node.id);
+        let id = format!("virtual:{}", node.id);
+        let device = |id: &str| Some(DeviceRef::Device { id: id.to_string(), name: node.label.clone() });
+        cables.push(Cable {
+            id: id.clone(),
+            name: node.label.clone(),
+            render: device(&sink),
+            capture: device(&source),
+            created_at: 0,
+        });
+        devices.push(VirtualCable {
+            node: node.id.clone(),
+            label: node.label.clone(),
+            sink,
+            source,
+        });
+        node.cable = Some(id);
+    }
+    (graph, cables, devices)
+}
+
+/// The current system default devices: the engine opens "default" in input and output nodes
+/// as a specific device and reopens it when the system changes it.
+/// If the graph replaces them with the "System" node, "default" means the replacement device
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Defaults {
     pub render: Option<String>,
     pub capture: Option<String>,
 }
 
-/// Чем нода является для плана
+/// What a node is for the plan
 enum Role<'a> {
     Input(Option<&'a DeviceRef>),
     Output(Option<&'a DeviceRef>),
     App,
-    /// Устройства по умолчанию в Windows
+    /// The system default devices
     System,
-    /// Кабель из общего списка: вход — устройство вывода, выход — устройство записи
+    /// A cable from the shared list: its input is an output device, its output a recording device
     Cable(&'a Cable),
-    /// Внутренний кабель: смешивание внутри движка, системе не виден
+    /// An internal cable: mixing inside the engine, invisible to the system
     Bus,
-    /// Нода ссылается на удалённый кабель
+    /// The node refers to a removed cable
     Deleted,
 }
 
 struct Compiler<'a> {
     nodes: HashMap<&'a str, &'a GraphNode>,
     cables: HashMap<&'a str, &'a Cable>,
-    /// С учётом подмены нодой «Система»
+    /// Taking the "System" node replacement into account
     defaults: Defaults,
     issues: Vec<Issue>,
 }
@@ -127,54 +193,54 @@ impl<'a> Compiler<'a> {
             edges: edges.iter().map(|s| s.to_string()).collect(),
             message: message.into(),
         };
-        // одна и та же нода попадается на пути нескольких связей
+        // the same node turns up on the paths of several links
         if !self.issues.contains(&issue) {
             self.issues.push(issue);
         }
     }
 
-    /// Устройство, из которого движок читает звук ноды
+    /// The device the engine reads the node's sound from
     fn source_device(&mut self, node: &'a GraphNode) -> Option<String> {
         match self.role(node) {
-            Role::Input(None) => self.issue(&[&node.id], &[], tr!("Не выбрано устройство ввода")),
+            Role::Input(None) => self.issue(&[&node.id], &[], tr!("issue_no_input_device")),
             Role::Input(Some(DeviceRef::Device { id, .. })) => return Some(id.clone()),
             Role::Input(Some(DeviceRef::Default)) => match &self.defaults.capture {
                 Some(id) => return Some(id.clone()),
-                None => self.issue(&[&node.id], &[], tr!("В системе нет устройства ввода по умолчанию")),
+                None => self.issue(&[&node.id], &[], tr!("issue_no_default_input")),
             },
-            Role::Cable(cable) => match &cable.capture {
-                Some(DeviceRef::Device { id, .. }) => return Some(id.clone()),
-                _ => self.issue(&[&node.id], &[], tr!(
-                    "У кабеля «{cable}» не выбран выход",
+            Role::Cable(cable) => match cable_source(cable) {
+                Some(id) => return Some(id),
+                None => self.issue(&[&node.id], &[], tr!(
+                    "issue_cable_no_output",
                     cable = cable.name
                 )),
             },
-            Role::Deleted => self.issue(&[&node.id], &[], tr!("Кабель удалён из списка кабелей")),
+            Role::Deleted => self.issue(&[&node.id], &[], tr!("issue_cable_deleted")),
             Role::Output(_) | Role::App | Role::System | Role::Bus => {}
         }
         None
     }
 
-    /// Устройство, в которое движок играет звук для ноды
+    /// The device the engine plays the node's sound into
     fn sink_device(&mut self, node: &'a GraphNode) -> Option<String> {
         match self.role(node) {
-            Role::Output(None) => self.issue(&[&node.id], &[], tr!("Не выбрано устройство вывода")),
+            Role::Output(None) => self.issue(&[&node.id], &[], tr!("issue_no_output_device")),
             Role::Output(Some(DeviceRef::Device { id, .. })) => return Some(id.clone()),
             Role::Output(Some(DeviceRef::Default)) => match &self.defaults.render {
                 Some(id) => return Some(id.clone()),
-                None => self.issue(&[&node.id], &[], tr!("В системе нет устройства вывода по умолчанию")),
+                None => self.issue(&[&node.id], &[], tr!("issue_no_default_output")),
             },
             Role::Cable(cable) => match &cable.render {
                 Some(DeviceRef::Device { id, .. }) => return Some(id.clone()),
-                _ => self.issue(&[&node.id], &[], tr!("У кабеля «{cable}» не выбран вход", cable = cable.name)),
+                _ => self.issue(&[&node.id], &[], tr!("issue_cable_no_input", cable = cable.name)),
             },
-            Role::Deleted => self.issue(&[&node.id], &[], tr!("Кабель удалён из списка кабелей")),
+            Role::Deleted => self.issue(&[&node.id], &[], tr!("issue_cable_deleted")),
             Role::Input(_) | Role::App | Role::System | Role::Bus => {}
         }
         None
     }
 
-    /// Куда направить звук приложения: устройство ноды, в которую идёт связь
+    /// Where to send an app's sound: the device of the node the link goes to
     fn app_render(&mut self, edge: &GraphEdge, target: &'a GraphNode) -> Option<Target> {
         let ids = [edge.source.as_str(), target.id.as_str()];
         match self.role(target) {
@@ -184,7 +250,7 @@ impl<'a> Compiler<'a> {
                 &ids,
                 &[&edge.id],
                 tr!(
-                    "Windows отправляет звук приложения только в устройство, а внутренний кабель системе не виден. Выберите для кабеля кабель из списка"
+                    "issue_app_to_internal_cable"
                 ),
             ),
             Role::App | Role::System => {
@@ -192,7 +258,7 @@ impl<'a> Compiler<'a> {
                     &ids,
                     &[&edge.id],
                     tr!(
-                        "Напрямую их не соединить: звук идёт из устройства вывода в устройство ввода, поставьте между ними кабель"
+                        "issue_device_to_device"
                     ),
                 )
             }
@@ -201,28 +267,34 @@ impl<'a> Compiler<'a> {
         None
     }
 
-    /// Откуда приложению брать микрофон: устройство ноды, из которой идёт связь
+    /// Where an app takes its microphone from: the device of the node the link comes from
     fn app_capture(&mut self, edge: &GraphEdge, source: &'a GraphNode) -> Option<Target> {
         let ids = [source.id.as_str(), edge.target.as_str()];
         match self.role(source) {
             Role::Input(Some(DeviceRef::Default)) => return Some(Target::Default),
+            // the system gives an app only a recording device, not a loopback of the cable's input
+            Role::Cable(cable) if device_id(&cable.capture).is_none() => self.issue(
+                &ids,
+                &[&edge.id],
+                tr!("issue_cable_no_output_to_app", cable = cable.name),
+            ),
             Role::Input(_) | Role::Cable(_) | Role::Deleted => return self.source_device(source).map(Target::Device),
             Role::Bus => self.issue(
                 &ids,
                 &[&edge.id],
                 tr!(
-                    "Приложение слушает только устройство, а внутренний кабель системе не виден. Выберите для кабеля кабель из списка"
+                    "issue_internal_cable_to_app"
                 ),
             ),
-            // о связи двух приложений говорит сторона источника
+            // a link between two apps is reported by the source side
             Role::App | Role::System | Role::Output(_) => {}
         }
         None
     }
 
-    /// Устройства записи, звук которых доходит до ноды по связям движка (через внутренние кабели),
-    /// с громкостью: gain — уже набранное по пути, сюда домножаются громкости нод-источников.
-    /// Если до устройства несколько путей, берётся самый громкий: звук не удваивается
+    /// Recording devices whose sound reaches the node through engine links (via internal cables),
+    /// with volume: gain is what the path has gathered so far, source node volumes multiply into it.
+    /// If there are several paths to a device, the loudest one counts: the sound isn't doubled
     fn collect_sources(
         &mut self,
         node: &'a GraphNode,
@@ -253,9 +325,9 @@ fn device_id(device: &Option<DeviceRef>) -> Option<&str> {
     }
 }
 
-/// Связи, лежащие на петлях, сгруппированные по петлям (компоненты сильной связности)
+/// Links that lie on loops, grouped by loop (strongly connected components)
 fn cycles<'a>(nodes: &[&'a str], edges: &[&'a GraphEdge]) -> Vec<(Vec<&'a str>, Vec<&'a str>)> {
-    // алгоритм Тарьяна; графы маленькие, рекурсии хватает
+    // Tarjan's algorithm; graphs are small, recursion is enough
     struct Tarjan<'a, 'b> {
         edges: &'b [&'a GraphEdge],
         index: HashMap<&'a str, usize>,
@@ -312,7 +384,7 @@ fn cycles<'a>(nodes: &[&'a str], edges: &[&'a GraphEdge]) -> Vec<(Vec<&'a str>, 
             t.visit(n);
         }
     }
-    // связь лежит на петле, если оба конца в одной компоненте (в том числе связь ноды с собой)
+    // a link lies on a loop if both ends are in one component (a node's link to itself included)
     let mut groups: BTreeMap<usize, (Vec<&'a str>, Vec<&'a str>)> = BTreeMap::new();
     for e in edges {
         let c = t.component[e.source.as_str()];
@@ -343,23 +415,23 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
         .filter(|e| c.nodes.contains_key(e.source.as_str()) && c.nodes.contains_key(e.target.as_str()))
         .collect();
 
-    // петли: звук пошёл бы по кругу и завыл. Такие связи не выполняются
+    // loops: sound would go round in circles and howl. Such links aren't carried out
     let mut looped: HashSet<&str> = HashSet::new();
     for (nodes, loop_edges) in cycles(&node_ids, &edges) {
         c.issue(
             &nodes,
             &loop_edges,
-            tr!("Петля: звук пойдёт по кругу. Связи петли не работают, пока её не разорвать"),
+            tr!("issue_loop"),
         );
         looped.extend(loop_edges);
     }
     edges.retain(|e| !looped.contains(e.id.as_str()));
 
-    // эти связи выполняет Windows, а не движок
+    // the system carries out these links, not the engine
     let is_routed = |c: &Compiler, id: &str| matches!(c.nodes[id].kind, NodeKind::App | NodeKind::System);
 
-    // приложения и «Система»: у каждого одно устройство вывода и одно устройство ввода.
-    // «Система» первая: от неё зависит, что значит «по умолчанию» у приложений
+    // apps and "System": each has one output device and one input device.
+    // "System" goes first: it decides what "default" means for apps
     let mut routes = Vec::new();
     let mut system: Option<SystemRoute> = None;
     let mut seen_apps: HashMap<String, &str> = HashMap::new();
@@ -376,7 +448,7 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
         }
         let is_system = node.kind == NodeKind::System;
         if !is_system && node.app.is_none() {
-            c.issue(&[&node.id], &[], tr!("Не выбрано приложение"));
+            c.issue(&[&node.id], &[], tr!("app_none_selected"));
             continue;
         }
 
@@ -390,11 +462,11 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
                     &ids,
                     if is_system {
                         tr!(
-                            "Устройство вывода по умолчанию одно: Windows не может отправить звук в несколько мест. Направьте его в кабель, а из кабеля — куда нужно"
+                            "issue_default_output_fan_out"
                         )
                     } else {
                         tr!(
-                            "У приложения одно устройство вывода: Windows не может отправить его звук в несколько мест. Направьте его в кабель, а из кабеля — куда нужно"
+                            "issue_app_fan_out"
                         )
                     },
                 );
@@ -411,11 +483,11 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
                     &ids,
                     if is_system {
                         tr!(
-                            "Устройство ввода по умолчанию одно. Чтобы слышать несколько источников, сведите их во внутренний кабель, оттуда — в кабель из списка, а его — сюда"
+                            "issue_default_input_fan_in"
                         )
                     } else {
                         tr!(
-                            "У приложения одно устройство ввода. Чтобы оно слышало несколько источников, сведите их во внутренний кабель, оттуда — в кабель из списка, а его — в приложение"
+                            "issue_app_fan_in"
                         )
                     },
                 );
@@ -426,11 +498,11 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
         if is_system {
             if let Some(first) = &system {
                 c.issue(&[&first.node, &node.id], &[], tr!(
-                    "Нода «Система» в графе несколько раз: устройство по умолчанию одно"
+                    "issue_system_node_repeated"
                 ));
                 continue;
             }
-            // «Система → вывод по умолчанию» ничего не меняет
+            // "System → default output" changes nothing
             let device = |t: Option<Target>| match t {
                 Some(Target::Device(id)) => Some(id),
                 _ => None,
@@ -440,7 +512,7 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
                 render: device(render),
                 capture: device(capture),
             };
-            // дальше «по умолчанию» в нодах — уже подменённые устройства
+            // from here on "default" in nodes means the replacement devices
             if let Some(id) = &route.render {
                 c.defaults.render = Some(id.clone());
             }
@@ -454,19 +526,19 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
         if render.is_none() && capture.is_none() {
             continue;
         }
-        // Windows хранит настройку на приложение, а не на ноду
+        // the system stores the setting per app, not per node
         let app = node.app.as_ref().unwrap();
         let key = app.exe.to_lowercase();
         if let Some(first) = seen_apps.get(&key) {
             c.issue(&[first, &node.id], &[], tr!(
-                "«{app}» в графе несколько раз: у приложения одна настройка устройств",
+                "issue_app_repeated",
                 app = app.name
             ));
             continue;
         }
         seen_apps.insert(key, &node.id);
-        // звук приложения, которое играет прямо в устройство ноды вывода, движок не трогает:
-        // громкость той ноды применяется через громкость приложения
+        // the engine doesn't touch the sound of an app playing straight into an output node's device:
+        // that node's volume is applied through the app's volume
         let output_volume = match outgoing.as_slice() {
             [edge] if c.nodes[edge.target.as_str()].kind == NodeKind::Output => c.nodes[edge.target.as_str()].volume,
             _ => 1.0,
@@ -480,7 +552,7 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
         });
     }
 
-    // потоки движка: связи без приложений. Звук собирается к каждому устройству вывода
+    // engine streams: links without apps. Sound is gathered for every output device
     let engine_edges: Vec<&GraphEdge> = edges
         .iter()
         .copied()
@@ -492,24 +564,24 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
         if !is_sink || !engine_edges.iter().any(|e| e.target == node.id) {
             continue;
         }
-        // громкость кабеля действует на звук, который из него забирают, поэтому кабель-приёмник её не домножает
+        // a cable's volume applies to the sound taken from it, so a receiving cable doesn't multiply it in
         let sink_volume = if matches!(c.role(node), Role::Output(_)) { node.volume } else { 1.0 };
         let mut sources = BTreeMap::new();
         c.collect_sources(node, &engine_edges, &mut HashSet::new(), sink_volume, &mut sources);
         let Some(sink) = c.sink_device(node) else { continue };
-        // кабель сам в себя: его вход и выход — одна пара, звук пошёл бы по кругу.
-        // Так бывает и неявно: «по умолчанию» сейчас вход кабеля, потому что его назначила «Система»
+        // a cable into itself: its input and output are one pair, sound would go round in circles.
+        // It also happens implicitly: "default" is now the cable's input because "System" set it
         if let Some(cable) = cables.iter().find(|cb| device_id(&cb.render) == Some(sink.as_str())) {
-            if let Some(capture) = device_id(&cable.capture).filter(|id| sources.contains_key(*id)) {
-                sources.remove(capture);
+            if let Some(capture) = cable_source(cable).filter(|id| sources.contains_key(id)) {
+                sources.remove(&capture);
                 let into: Vec<&str> = engine_edges.iter().filter(|e| e.target == node.id).map(|e| e.id.as_str()).collect();
                 let message = if matches!(c.role(node), Role::Output(Some(DeviceRef::Default))) {
                     tr!(
-                        "Петля: устройство вывода по умолчанию сейчас — вход кабеля «{cable}» (его назначила нода «Система»), и звук кабеля вернулся бы в него же",
+                        "issue_default_output_loop",
                         cable = cable.name
                     )
                 } else {
-                    tr!("Петля: звук кабеля «{cable}» вернулся бы в него же", cable = cable.name)
+                    tr!("issue_cable_into_itself", cable = cable.name)
                 };
                 c.issue(&[&node.id], &into, message);
             }
@@ -533,19 +605,20 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
             })
             .collect(),
         issues: c.issues,
+        virtual_cables: Vec::new(),
     }
 }
 
-/// Несколько графов сразу, в порядке запуска. Потоки в одно устройство смешиваются, а то, что
-/// в Windows одно на всех (устройства приложения, устройства по умолчанию), достаётся графу,
-/// запущенному раньше; у остальных это проблема. Незапущенный граф, открытый в окне,
-/// ставится последним: так видно, с чем он столкнётся, если его запустить
+/// Several graphs at once, in start order. Streams into one device are mixed, and what the
+/// system has only one of (an app's devices, the default devices) goes to the graph
+/// started earlier; for the others it is a problem. A stopped graph open in the window
+/// goes last: this shows what it will run into if started
 pub fn compile_all(graphs: &[&Graph], cables: &[Cable], defaults: &Defaults) -> Vec<Plan> {
     let mut defaults = defaults.clone();
     let mut app_owner: HashMap<String, &str> = HashMap::new();
     let mut system_owner: Option<&str> = None;
-    // звук между устройствами: устройство записи → устройство вывода (потоки принятых графов),
-    // вход кабеля → его выход. Кольцо в этой сети — петля через несколько графов
+    // sound between devices: recording device → output device (streams of accepted graphs),
+    // a cable's input → its output. A cycle in this network is a loop through several graphs
     let mut links: HashMap<String, BTreeSet<String>> = HashMap::new();
     for c in cables {
         if let (Some(render), Some(capture)) = (device_id(&c.render), device_id(&c.capture)) {
@@ -564,7 +637,7 @@ pub fn compile_all(graphs: &[&Graph], cables: &[Cable], defaults: &Defaults) -> 
                     nodes: vec![route.node.clone()],
                     edges: Vec::new(),
                     message: tr!(
-                        "«{app}» уже направляет запущенный граф «{graph}»: у приложения одна настройка устройств",
+                        "issue_app_taken",
                         app = route.app.name,
                         graph = owner
                     ),
@@ -581,14 +654,14 @@ pub fn compile_all(graphs: &[&Graph], cables: &[Cable], defaults: &Defaults) -> 
                     nodes: vec![route.node.clone()],
                     edges: Vec::new(),
                     message: tr!(
-                        "Устройства по умолчанию уже назначает запущенный граф «{graph}»",
+                        "issue_defaults_taken",
                         graph = owner
                     ),
                 });
                 plan.system = None;
             } else {
                 system_owner = Some(&graph.name);
-                // в графах после этого «по умолчанию» — подменённые устройства
+                // in the graphs after this one "default" means the replacement devices
                 if let Some(id) = &route.render {
                     defaults.render = Some(id.clone());
                 }
@@ -598,7 +671,7 @@ pub fn compile_all(graphs: &[&Graph], cables: &[Cable], defaults: &Defaults) -> 
             }
         }
 
-        // петли внутри графа уже убраны, поэтому проверять нужно только графы после первого
+        // loops inside a graph are already removed, so only graphs after the first need checking
         let mut looped = false;
         for stream in &mut plan.streams {
             if i > 0 {
@@ -618,7 +691,7 @@ pub fn compile_all(graphs: &[&Graph], cables: &[Cable], defaults: &Defaults) -> 
                 nodes: Vec::new(),
                 edges: Vec::new(),
                 message: tr!(
-                    "Петля с другим запущенным графом: звук пошёл бы по кругу через их кабели. Часть связей этого графа не работает, пока её не разорвать"
+                    "issue_loop_across_graphs"
                 ),
             });
         }
@@ -629,7 +702,7 @@ pub fn compile_all(graphs: &[&Graph], cables: &[Cable], defaults: &Defaults) -> 
     plans
 }
 
-/// Есть ли путь по звуку от устройства from к устройству to
+/// Whether sound has a path from device from to device to
 fn reaches(links: &HashMap<String, BTreeSet<String>>, from: &str, to: &str) -> bool {
     let mut seen = HashSet::new();
     let mut stack = vec![from];
@@ -644,7 +717,7 @@ fn reaches(links: &HashMap<String, BTreeSet<String>>, from: &str, to: &str) -> b
     false
 }
 
-/// Один план для движка из планов запущенных графов (после compile_all)
+/// One plan for the engine from the plans of running graphs (after compile_all)
 pub fn merge(plans: &[Plan]) -> Plan {
     let mut streams: BTreeMap<String, BTreeMap<String, f32>> = BTreeMap::new();
     for stream in plans.iter().flat_map(|p| &p.streams) {
@@ -665,6 +738,7 @@ pub fn merge(plans: &[Plan]) -> Plan {
             })
             .collect(),
         issues: plans.iter().flat_map(|p| p.issues.iter().cloned()).collect(),
+        virtual_cables: plans.iter().flat_map(|p| p.virtual_cables.iter().cloned()).collect(),
     }
 }
 
@@ -765,7 +839,7 @@ mod tests {
 
     #[test]
     fn example_graph() {
-        // как пример в приложении: микрофон → голос → Discord, Spotify → музыка → наушники и Discord
+        // like the example in the app: microphone → voice → Discord, Spotify → music → headphones and Discord
         let g = graph(
             vec![
                 input("mic", Some(DeviceRef::Default)),
@@ -779,7 +853,7 @@ mod tests {
         );
         let cables = [cable("v", "v.in", "v.out"), cable("m", "m.in", "m.out")];
         let plan = compile(&g, &cables, &defaults());
-        // у Discord два входа — это ошибка, остальное работает
+        // Discord has two inputs: that is an error, the rest works
         assert_eq!(plan.issues.len(), 1, "{:?}", plan.issues);
         assert_eq!(plan.issues[0].nodes, vec!["discord"]);
         assert_eq!(plan.routes.len(), 1);
@@ -798,7 +872,7 @@ mod tests {
 
     #[test]
     fn bus_mixes_sources() {
-        // два микрофона во внутренний кабель, из него в наушники и в кабель
+        // two microphones into an internal cable, from it to the headphones and to a cable
         let g = graph(
             vec![
                 input("m1", dev("mic1")),
@@ -852,7 +926,7 @@ mod tests {
         );
         let plan = compile(&g, &[], &defaults());
         let messages: Vec<&str> = plan.issues.iter().map(|i| i.message.as_str()).collect();
-        assert_eq!(messages, vec!["Не выбрано приложение", "Не выбрано устройство ввода", "Кабель удалён из списка кабелей"]);
+        assert_eq!(messages, vec!["No app selected", "No input device selected", "The cable was deleted from the cable list"]);
         assert!(plan.streams.is_empty());
     }
 
@@ -869,8 +943,8 @@ mod tests {
 
     #[test]
     fn system_defaults_to_cables() {
-        // всё, что играет по умолчанию, — в кабель «Музыка», микрофон по умолчанию — выход кабеля «Голос»;
-        // Spotify → «по умолчанию» следует за системой, то есть тоже в «Музыку»
+        // everything playing to the default goes into cable "Music", the default microphone is the output of cable "Voice";
+        // Spotify → "default" follows the system, so it goes into "Music" too
         let g = graph(
             vec![
                 system("sys"),
@@ -900,7 +974,7 @@ mod tests {
 
     #[test]
     fn default_output_replaced_by_cable_is_a_loop() {
-        // «Система → кабель → вывод по умолчанию»: по умолчанию теперь вход этого же кабеля
+        // "System → cable → default output": the default is now this same cable's input
         let g = graph(
             vec![system("sys"), cable_node("c", Some("c")), output("default", Some(DeviceRef::Default)), output("hp", dev("hp"))],
             &[("sys", "c"), ("c", "default"), ("c", "hp")],
@@ -908,7 +982,7 @@ mod tests {
         let plan = compile(&g, &[cable("c", "c.in", "c.out")], &defaults());
         assert_eq!(plan.issues.len(), 1, "{:?}", plan.issues);
         assert_eq!(plan.issues[0].nodes, vec!["default"]);
-        assert!(plan.issues[0].message.starts_with("Петля: устройство вывода по умолчанию"));
+        assert!(plan.issues[0].message.starts_with("Loop: the default output device"));
         assert_eq!(plan.streams, vec![stream("hp", &["c.out"])]);
     }
 
@@ -918,14 +992,14 @@ mod tests {
         let plan = compile(&g, &[], &defaults());
         let messages: Vec<&str> = plan.issues.iter().map(|i| i.message.as_str()).collect();
         assert_eq!(messages.len(), 2, "{messages:?}");
-        assert!(messages[0].starts_with("Напрямую их не соединить"));
-        assert!(messages[1].starts_with("Нода «Система» в графе несколько раз"));
+        assert!(messages[0].starts_with("These can't be connected directly"));
+        assert!(messages[1].starts_with("The “System” node appears in the graph more than once"));
     }
 
     #[test]
     fn volumes_multiply_along_path() {
-        // микрофон 50% → внутренний 50% → наушники 200% = 50%; кабель 80% → наушники 200% = 160%;
-        // кабель-приёмник свою громкость не домножает; приложение → вывод 50% = 50% в микшере
+        // microphone 50% → internal 50% → headphones 200% = 50%; cable 80% → headphones 200% = 160%;
+        // a receiving cable doesn't multiply in its volume; app → output 50% = 50% in the mixer
         let vol = |mut n: GraphNode, v: f32| {
             n.volume = v;
             n
@@ -969,7 +1043,7 @@ mod tests {
 
     #[test]
     fn graphs_share_devices_and_mix() {
-        // два графа играют в одни наушники: потоки смешиваются
+        // two graphs play into the same headphones: the streams are mixed
         let a = named(graph(vec![input("mic", dev("mic")), output("o", dev("hp"))], &[("mic", "o")]), "a");
         let b = named(graph(vec![cable_node("c", Some("c")), output("o2", dev("hp"))], &[("c", "o2")]), "b");
         let cables = [cable("c", "c.in", "c.out")];
@@ -998,8 +1072,8 @@ mod tests {
         let plans = compile_all(&[&a, &b], &cables, &defaults());
         assert!(plans[0].issues.is_empty());
         let messages: Vec<&str> = plans[1].issues.iter().map(|i| i.message.as_str()).collect();
-        assert!(messages[0].starts_with("«X.exe» уже направляет запущенный граф «a»"), "{messages:?}");
-        assert!(messages[1].starts_with("Устройства по умолчанию уже назначает"), "{messages:?}");
+        assert!(messages[0].starts_with("“X.exe” is already routed by the running graph “a”"), "{messages:?}");
+        assert!(messages[1].starts_with("The default devices are already set by"), "{messages:?}");
         let plan = merge(&plans);
         assert_eq!(plan.routes.len(), 1);
         assert_eq!(plan.system.unwrap().node, "s");
@@ -1007,13 +1081,81 @@ mod tests {
 
     #[test]
     fn loop_across_graphs_is_cut_in_later_graph() {
-        // a: кабель c → кабель d, b: кабель d → кабель c — вместе звук пошёл бы по кругу
+        // a: cable c → cable d, b: cable d → cable c: together sound would go round in circles
         let cables = [cable("c", "c.in", "c.out"), cable("d", "d.in", "d.out")];
         let a = named(graph(vec![cable_node("c", Some("c")), cable_node("d", Some("d"))], &[("c", "d")]), "a");
         let b = named(graph(vec![cable_node("d", Some("d")), cable_node("c", Some("c"))], &[("d", "c")]), "b");
         let plans = compile_all(&[&a, &b], &cables, &defaults());
         assert!(plans[0].issues.is_empty());
-        assert!(plans[1].issues[0].message.starts_with("Петля с другим запущенным графом"));
+        assert!(plans[1].issues[0].message.starts_with("Loop with another running graph"));
         assert_eq!(merge(&plans).streams, vec![stream("d.in", &["c.out"])]);
+    }
+
+    #[test]
+    fn virtual_cables_are_devices() {
+        // as on Linux: an app into a cable, the cable into the headphones and into a listening app
+        let g = graph(
+            vec![
+                app("player", "player"),
+                cable_node("mix", None),
+                output("phones", dev("hp")),
+                app("call", "call"),
+                input("mic", dev("mic")),
+            ],
+            &[("player", "mix"), ("mix", "phones"), ("mix", "call"), ("mic", "mix")],
+        );
+        let (g, cables, devices) = virtualize(&g);
+        let (sink, source) = virtual_device_names("mix");
+        assert_eq!((sink.as_str(), source.as_str()), ("audiograph.mix", "audiograph.mix.out"));
+        assert_eq!(devices, vec![VirtualCable { node: "mix".into(), label: "mix".into(), sink: sink.clone(), source: source.clone() }]);
+        let plan = compile(&g, &cables, &defaults());
+        assert!(plan.issues.is_empty(), "{:?}", plan.issues);
+        let route = |node: &str| plan.routes.iter().find(|r| r.node == node).unwrap();
+        assert_eq!(route("player").render, Some(Target::Device(sink.clone())));
+        assert_eq!(route("call").capture, Some(Target::Device(source.clone())));
+        assert_eq!(plan.streams, vec![stream("audiograph.mix", &["mic"]), stream("hp", &["audiograph.mix.out"])]);
+    }
+
+    #[test]
+    fn cable_without_output_is_read_through_loopback() {
+        // the default output goes into the input of cable "c" that has no output chosen: the engine
+        // takes the sound played into its input and sends it to both outputs; an app can't hear it
+        let g = graph(
+            vec![system("sys"), cable_node("c", Some("c")), output("hp", dev("hp")), output("spk", dev("spk")), app("a", "a.exe")],
+            &[("sys", "c"), ("c", "hp"), ("c", "spk"), ("c", "a")],
+        );
+        let cables = [Cable { capture: None, ..cable("c", "c.in", "") }];
+        let plan = compile(&g, &cables, &defaults());
+        assert_eq!(plan.system.unwrap().render, Some("c.in".into()));
+        assert_eq!(plan.streams, vec![stream("hp", &["loopback:c.in"]), stream("spk", &["loopback:c.in"])]);
+        assert!(plan.routes.is_empty());
+        assert_eq!(plan.issues.len(), 1, "{:?}", plan.issues);
+        assert_eq!(plan.issues[0].edges, vec!["c->a"]);
+        assert!(plan.issues[0].message.starts_with("Cable “c” has no output"));
+    }
+
+    #[test]
+    fn cable_without_output_into_itself_is_a_loop() {
+        let g = graph(vec![cable_node("c", Some("c")), output("o", dev("c.in"))], &[("c", "o")]);
+        let cables = [Cable { capture: None, ..cable("c", "c.in", "") }];
+        let plan = compile(&g, &cables, &defaults());
+        assert!(plan.issues[0].message.starts_with("Loop: the audio of cable “c”"), "{:?}", plan.issues);
+        assert!(plan.streams.is_empty());
+    }
+
+    #[test]
+    fn virtual_cable_into_itself_is_a_loop() {
+        let g = graph(vec![cable_node("a", None), cable_node("b", None)], &[("a", "b"), ("b", "a")]);
+        let (g, cables, _) = virtualize(&g);
+        let plan = compile(&g, &cables, &defaults());
+        assert!(plan.issues[0].message.starts_with("Loop"));
+        assert!(plan.streams.is_empty());
+    }
+
+    #[test]
+    fn virtual_device_names_are_safe() {
+        let (sink, source) = virtual_device_names("3f2a-9b {x}/'\"");
+        assert_eq!(sink, "audiograph.3f2a-9bx");
+        assert_eq!(source, "audiograph.3f2a-9bx.out");
     }
 }
