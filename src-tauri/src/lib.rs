@@ -3,6 +3,7 @@
 mod i18n;
 mod apps;
 mod autostart;
+mod calibrate;
 mod cables;
 #[cfg(windows)]
 mod com;
@@ -113,6 +114,9 @@ pub fn run() {
             engine::engine_stop,
             engine::engine_volume,
             engine::engine_balance,
+            engine::engine_quiet,
+            calibrate::calibrate_measure,
+            calibrate::calibrate_preview,
             settings::settings_get,
             settings::settings_set,
             autostart::autostart_supported,

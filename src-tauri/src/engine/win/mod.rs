@@ -1,5 +1,6 @@
 //! The engine on Windows: WASAPI streams and app devices.
 
+pub(crate) mod probe;
 mod router;
 mod streams;
 

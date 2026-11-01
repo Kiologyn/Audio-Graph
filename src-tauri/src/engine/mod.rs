@@ -13,6 +13,8 @@ pub(crate) mod plan;
 mod ring;
 #[cfg(windows)]
 mod win;
+#[cfg(windows)]
+pub(crate) use win::probe;
 
 use crate::cables::Cable;
 use crate::devices::{AudioDevice, Flow};
@@ -133,6 +135,9 @@ enum Msg {
     Settings { disable_idle_cables: bool },
     /// A device was plugged in, unplugged, turned on or off: reconnect at once
     DevicesChanged,
+    /// Delay calibration: the engine's sound is silent for this long so the microphone hears only the test
+    /// signal; zero ends it. A time limit, so a closed window can't leave the sound off
+    Quiet(Duration),
     /// App exit: stop everything, give apps back their devices and reply
     Shutdown(mpsc::Sender<()>),
 }
@@ -261,6 +266,7 @@ fn supervise(
     // what is already in the log: every error is written when it appears
     let mut logged_running: Vec<String> = Vec::new();
     let mut logged_errors: HashSet<String> = HashSet::new();
+    let mut quiet_until: Option<std::time::Instant> = None;
     // the system's devices: chosen devices that changed their id are found in it by name
     let mut devices = crate::devices::list().unwrap_or_default();
     let same = |g: &Option<Graph>, id: &str| g.as_ref().is_some_and(|g| g.id == id);
@@ -332,6 +338,7 @@ fn supervise(
                     reply = Some(tx);
                 }
                 Msg::DevicesChanged => devices_changed = true,
+                Msg::Quiet(time) => quiet_until = (!time.is_zero()).then(|| std::time::Instant::now() + time),
             }
         }
         if devices_changed {
@@ -379,7 +386,11 @@ fn supervise(
         let limits: Vec<Option<f32>> = checked.iter().map(|g| g.delay_limit()).collect();
         plan::apply_delays(&mut plans, running.len(), &limits);
         // while nothing runs the plan is empty: streams close, apps get their devices back
-        let (streams, apps) = backend.apply(&plan::merge(&plans[..running.len()]));
+        let mut merged = plan::merge(&plans[..running.len()]);
+        if quiet_until.is_some_and(|t| t > std::time::Instant::now()) {
+            merged.streams.iter_mut().flat_map(|s| &mut s.sources).for_each(|s| s.gain = [0.0; 2]);
+        }
+        let (streams, apps) = backend.apply(&merged);
         let shown = opened.as_ref().or(running.first());
         let issues = shown
             .and_then(|s| checked.iter().position(|g| g.id == s.id))
@@ -516,6 +527,12 @@ pub fn engine_start(engine: State<Engine>, graphs: State<GraphStore>, id: String
 #[tauri::command]
 pub fn engine_stop(engine: State<Engine>, id: Option<String>) {
     engine.send(Msg::Stop(id));
+}
+
+/// Delay calibration: silence the engine's sound for this many seconds, 0 brings it back
+#[tauri::command]
+pub fn engine_quiet(engine: State<Engine>, seconds: f32) {
+    engine.send(Msg::Quiet(Duration::from_secs_f32(seconds.clamp(0.0, 60.0))));
 }
 
 #[tauri::command]

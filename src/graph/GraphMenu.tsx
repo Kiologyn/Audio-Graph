@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useT } from "../i18n";
 import { useSettings } from "../settings";
+import { useCalibration } from "./Calibration";
 import { MAX_DELAY_LIMIT, type GraphMeta } from "./doc";
 import { useEngine } from "./engine";
 import { Icon } from "./icons";
@@ -173,6 +174,7 @@ function SecondsField({
 function GraphOptions({ graph, onExport }: { graph: GraphMeta; onExport: (result: Transfer) => void }) {
   const setPrefs = useLibrary((s) => s.setPrefs);
   const exportGraph = useLibrary((s) => s.exportGraph);
+  const openGraph = useLibrary((s) => s.open);
   const anchor = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const t = useT();
@@ -247,6 +249,19 @@ function GraphOptions({ graph, onExport }: { graph: GraphMeta; onExport: (result
             </label>
             <button
               className="ag-graph-options__export"
+              title={t("calibration_open_hint")}
+              onClick={async () => {
+                setOpen(false);
+                // calibration works with the graph on the canvas
+                await openGraph(graph.id);
+                useCalibration.getState().setOpen(true);
+              }}
+            >
+              <Icon name="volume" />
+              {t("calibration_open")}
+            </button>
+            <button
+              className="ag-graph-options__export is-next"
               onClick={() => {
                 setOpen(false);
                 exportGraph(graph.id).then(

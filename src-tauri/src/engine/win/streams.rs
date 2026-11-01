@@ -48,7 +48,7 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn describe(e: windows::core::Error) -> String {
+pub(super) fn describe(e: windows::core::Error) -> String {
     match e.code() {
         AUDCLNT_E_DEVICE_INVALIDATED => tr!("error_device_disconnected"),
         AUDCLNT_E_DEVICE_IN_USE => tr!("error_device_exclusive"),
@@ -221,7 +221,7 @@ impl Streams {
 }
 
 /// The event WASAPI wakes the thread with when a packet is due
-struct Event(HANDLE);
+pub(super) struct Event(pub(super) HANDLE);
 
 impl Drop for Event {
     fn drop(&mut self) {
@@ -249,7 +249,7 @@ impl Drop for ProAudio {
 
 /// Opens the device and sets up a stream in the engine format.
 /// "loopback:<output device>" opens the output device to record what is played into it
-fn open(device: &str) -> Result<(IAudioClient, Event), String> {
+pub(super) fn open(device: &str) -> Result<(IAudioClient, Event), String> {
     let (device, flags) = match device.strip_prefix(LOOPBACK_PREFIX) {
         Some(render) => (render, FLAGS | AUDCLNT_STREAMFLAGS_LOOPBACK),
         None => (device, FLAGS),

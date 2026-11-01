@@ -2,6 +2,7 @@ import { ReactFlowProvider } from "@xyflow/react";
 import { useEffect } from "react";
 import { CableMenu } from "./graph/CableMenu";
 import { useCables } from "./graph/cables";
+import { Calibration } from "./graph/Calibration";
 import { Canvas } from "./graph/Canvas";
 import { useDevices } from "./graph/devices";
 import { useEngine } from "./graph/engine";
@@ -63,6 +64,7 @@ export default function App() {
       <footer className="ag-statusbar">
         <SaveIndicator />
       </footer>
+      <Calibration />
     </div>
   );
 }
