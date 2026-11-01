@@ -169,6 +169,11 @@ impl Engine {
         self.send(Msg::Cables(cables));
     }
 
+    /// Starts a graph; refreshes one that already runs
+    pub fn start(&self, graph: &Graph) {
+        self.send(Msg::Start(graph.clone()));
+    }
+
     pub fn toggle(&self) {
         self.send(Msg::Toggle);
     }

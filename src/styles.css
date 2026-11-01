@@ -232,8 +232,19 @@ button {
   border-color: var(--ag-focus);
 }
 
-.ag-graph-options__seconds.is-disabled {
+.ag-graph-options__seconds.is-disabled,
+.ag-graph-options__check.is-disabled > input,
+.ag-graph-options__check.is-disabled > span,
+.ag-settings__check.is-disabled > input,
+.ag-settings__check.is-disabled > span {
   opacity: 0.5;
+}
+
+.ag-graph-options__check.is-disabled,
+.ag-settings__check.is-disabled,
+.ag-graph-options__check.is-disabled input,
+.ag-settings__check.is-disabled input {
+  cursor: default;
 }
 
 .ag-header-btn--icon {

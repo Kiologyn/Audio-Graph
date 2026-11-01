@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useT } from "../i18n";
+import { useSettings } from "../settings";
 import { MAX_DELAY_LIMIT, type GraphMeta } from "./doc";
 import { useEngine } from "./engine";
 import { Icon } from "./icons";
@@ -165,11 +166,12 @@ function SecondsField({
 
 /** The arrow in a graph's row: a menu with its volume and delay sliders and the delay range */
 function GraphOptions({ graph }: { graph: GraphMeta }) {
-  const setSliders = useLibrary((s) => s.setSliders);
+  const setPrefs = useLibrary((s) => s.setPrefs);
   const anchor = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const t = useT();
   const showDelay = graph.showDelay ?? false;
+  const autostart = useSettings((s) => s.autostart);
   return (
     <>
       <button
@@ -187,7 +189,7 @@ function GraphOptions({ graph }: { graph: GraphMeta }) {
               <input
                 type="checkbox"
                 checked={graph.showVolume ?? true}
-                onChange={(e) => setSliders(graph.id, { showVolume: e.currentTarget.checked })}
+                onChange={(e) => setPrefs(graph.id, { showVolume: e.currentTarget.checked })}
               />
               <span>
                 {t("graph_volume_sliders")}
@@ -199,7 +201,7 @@ function GraphOptions({ graph }: { graph: GraphMeta }) {
                 <input
                   type="checkbox"
                   checked={showDelay}
-                  onChange={(e) => setSliders(graph.id, { showDelay: e.currentTarget.checked })}
+                  onChange={(e) => setPrefs(graph.id, { showDelay: e.currentTarget.checked })}
                 />
                 <span>
                   {t("graph_delay_sliders")}
@@ -211,9 +213,21 @@ function GraphOptions({ graph }: { graph: GraphMeta }) {
                 max={MAX_DELAY_LIMIT}
                 disabled={!showDelay}
                 title={t("graph_delay_limit", { max: MAX_DELAY_LIMIT })}
-                onChange={(delayLimit) => setSliders(graph.id, { delayLimit })}
+                onChange={(delayLimit) => setPrefs(graph.id, { delayLimit })}
               />
             </div>
+            <label className={`ag-graph-options__check${autostart ? "" : " is-disabled"}`}>
+              <input
+                type="checkbox"
+                checked={graph.startOnLaunch ?? false}
+                disabled={!autostart}
+                onChange={(e) => setPrefs(graph.id, { startOnLaunch: e.currentTarget.checked })}
+              />
+              <span>
+                {t("graph_start_on_launch")}
+                <small>{t(autostart ? "graph_start_on_launch_hint" : "graph_start_on_launch_off")}</small>
+              </span>
+            </label>
           </div>
         </Popover>
       )}

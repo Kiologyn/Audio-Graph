@@ -17,6 +17,8 @@ export type GraphDoc = {
   showDelay: boolean;
   /** The delay sliders' range: from minus this many seconds to plus */
   delayLimit: number;
+  /** Start the graph when the app starts with the system */
+  startOnLaunch: boolean;
 };
 
 /** The widest delay slider range, matches MAX_DELAY_LIMIT in graphs.rs */
@@ -38,10 +40,10 @@ export type DocNode = {
 
 export type DocEdge = { id: string; source: string; target: string };
 
-export type GraphMeta = Pick<GraphDoc, "id" | "name" | "createdAt" | "updatedAt" | "showVolume" | "showDelay" | "delayLimit">;
-
 /** What the graph's options menu changes */
-export type GraphSliders = Pick<GraphDoc, "showVolume" | "showDelay" | "delayLimit">;
+export type GraphPrefs = Pick<GraphDoc, "showVolume" | "showDelay" | "delayLimit" | "startOnLaunch">;
+
+export type GraphMeta = Pick<GraphDoc, "id" | "name" | "createdAt" | "updatedAt"> & GraphPrefs;
 
 export function nodesToDoc(nodes: AudioNode[]): DocNode[] {
   return nodes.map((n) => {

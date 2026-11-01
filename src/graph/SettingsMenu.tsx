@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { LANGUAGES, useT } from "../i18n";
-import { dynamicCables, platform } from "../platform";
+import { autostartSupported, dynamicCables, platform } from "../platform";
 import { useSettings, type Lang, type Theme } from "../settings";
 import { Icon } from "./icons";
 import { PickerChip, Popover, PopoverItem } from "./Popover";
@@ -68,6 +68,7 @@ export function SettingsMenu() {
   const disableIdleCables = useSettings((s) => s.disableIdleCables);
   const hideMinimap = useSettings((s) => s.hideMinimap);
   const newGraphVolume = useSettings((s) => s.newGraphVolume);
+  const autostart = useSettings((s) => s.autostart);
   const set = useSettings((s) => s.set);
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -119,6 +120,18 @@ export function SettingsMenu() {
             <span className="ag-settings__label">{t("settings_language")}</span>
             <LanguagePicker value={language} onChange={(language) => set({ language })} />
           </div>
+          <label className={`ag-settings__check${autostartSupported() ? "" : " is-disabled"}`}>
+            <input
+              type="checkbox"
+              checked={autostart}
+              disabled={!autostartSupported()}
+              onChange={(e) => set({ autostart: e.currentTarget.checked })}
+            />
+            <span>
+              {t("settings_autostart")}
+              <small>{t(autostartSupported() ? "settings_autostart_hint" : "settings_autostart_portable")}</small>
+            </span>
+          </label>
           {/* Linux virtual cables exist only while the graph runs anyway */}
           {!dynamicCables() && <label className="ag-settings__check">
             <input

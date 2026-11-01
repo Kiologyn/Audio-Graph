@@ -886,6 +886,7 @@ mod tests {
             show_volume: true,
             show_delay: false,
             delay_limit: 0.5,
+            start_on_launch: false,
         }
     }
     fn defaults() -> Defaults {

@@ -4,17 +4,21 @@ import { invoke } from "@tauri-apps/api/core";
 export type Platform = "windows" | "linux" | "macos";
 
 let current: Platform = "windows";
+let installed = false;
 
 /** Learn the OS before the first render: it decides how cables work in the interface */
 export async function loadPlatform() {
   try {
-    current = await invoke<Platform>("platform");
+    [current, installed] = await Promise.all([invoke<Platform>("platform"), invoke<boolean>("autostart_supported")]);
   } catch {
     // outside Tauri (checks in a browser): as on Windows
   }
 }
 
 export const platform = () => current;
+
+/** The app is installed, not a portable file or an AppImage: only then it can start with the system */
+export const autostartSupported = () => installed;
 
 /**
  * Cables are virtual devices the graph creates itself (Linux): a cable node has no choice

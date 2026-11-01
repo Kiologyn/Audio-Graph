@@ -131,6 +131,9 @@ pub struct Graph {
     /// The delay sliders' range: from minus this many seconds to plus
     #[serde(default = "half_second")]
     pub delay_limit: f32,
+    /// Start the graph when the app starts with the system
+    #[serde(default)]
+    pub start_on_launch: bool,
 }
 
 /// The widest delay slider range: delays relative to each other add up, so two of these must fit
@@ -155,6 +158,7 @@ pub struct GraphMeta {
     pub show_volume: bool,
     pub show_delay: bool,
     pub delay_limit: f32,
+    pub start_on_launch: bool,
 }
 
 impl From<&Graph> for GraphMeta {
@@ -167,8 +171,19 @@ impl From<&Graph> for GraphMeta {
             show_volume: g.show_volume,
             show_delay: g.show_delay,
             delay_limit: g.delay_limit,
+            start_on_launch: g.start_on_launch,
         }
     }
+}
+
+/// A graph's options from its menu in the graph list
+#[derive(Deserialize, Clone, Copy, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphPrefs {
+    pub show_volume: bool,
+    pub show_delay: bool,
+    pub delay_limit: f32,
+    pub start_on_launch: bool,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -260,6 +275,13 @@ impl GraphStore {
         graphs.sort_by_key(|g| (place(&g.id), g.created_at));
         Ok(graphs)
     }
+
+    /// The graphs to start when the app starts with the system, in the order of the list
+    pub fn launch_graphs(&self) -> CmdResult<Vec<Graph>> {
+        let _guard = self.lock.lock().map_err(err)?;
+        let ids: Vec<String> = self.list()?.into_iter().filter(|g| g.start_on_launch).map(|g| g.id).collect();
+        ids.iter().map(|id| self.read(id)).collect()
+    }
 }
 
 /// Remembers the order of the graph list
@@ -314,6 +336,7 @@ pub fn graph_create(
         show_volume: show_volume.unwrap_or(true),
         show_delay: show_delay.unwrap_or(false),
         delay_limit: half_second(),
+        start_on_launch: false,
     };
     store.write(&graph)?;
     store.set_last_opened(Some(&graph.id))?;
@@ -348,21 +371,15 @@ pub fn graph_rename(store: State<GraphStore>, engine: State<Engine>, id: String,
     Ok(GraphMeta::from(&graph))
 }
 
-/// Volume and delay sliders of a graph not open in the window (the open one is saved whole)
+/// Options of a graph not open in the window (the open one is saved whole)
 #[tauri::command]
-pub fn graph_set_sliders(
-    store: State<GraphStore>,
-    engine: State<Engine>,
-    id: String,
-    volume: bool,
-    delay: bool,
-    delay_limit: f32,
-) -> CmdResult<GraphMeta> {
+pub fn graph_set_prefs(store: State<GraphStore>, engine: State<Engine>, id: String, prefs: GraphPrefs) -> CmdResult<GraphMeta> {
     let _guard = store.lock.lock().map_err(err)?;
     let mut graph = store.read(&id)?;
-    graph.show_volume = volume;
-    graph.show_delay = delay;
-    graph.delay_limit = delay_limit.clamp(0.001, MAX_DELAY_LIMIT);
+    graph.show_volume = prefs.show_volume;
+    graph.show_delay = prefs.show_delay;
+    graph.delay_limit = prefs.delay_limit.clamp(0.001, MAX_DELAY_LIMIT);
+    graph.start_on_launch = prefs.start_on_launch;
     graph.updated_at = now_ms();
     store.write(&graph)?;
     engine.saved(&graph);

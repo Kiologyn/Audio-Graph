@@ -2,6 +2,7 @@
 #[macro_use]
 mod i18n;
 mod apps;
+mod autostart;
 mod cables;
 #[cfg(windows)]
 mod com;
@@ -39,7 +40,7 @@ pub fn run() {
             log::init(&data_dir, &app.package_info().version.to_string());
             // settings first: they set the language of engine and tray messages
             let settings = settings::SettingsStore::new(&data_dir);
-            app.manage(graphs::GraphStore::new(data_dir.clone())?);
+            let graphs = graphs::GraphStore::new(data_dir.clone())?;
             let cables = cables::CableStore::new(&data_dir);
             let engine = engine::Engine::new(
                 app.handle().clone(),
@@ -47,15 +48,35 @@ pub fn run() {
                 cables.all().unwrap_or_default(),
                 &settings.get(),
             );
+            // the graphs marked for it start with the app while it starts with the system
+            if settings.get().autostart {
+                match graphs.launch_graphs() {
+                    Ok(list) => list.iter().for_each(|g| engine.start(g)),
+                    Err(e) => log::write(format!("failed to start graphs at launch: {e}")),
+                }
+                // the entry follows the app's path (another install folder)
+                if let Err(e) = autostart::set(true) {
+                    log::write(format!("failed to update the autostart entry: {e}"));
+                }
+            }
+            app.manage(graphs);
             app.manage(settings);
             app.manage(cables);
             app.manage(engine);
             // the app works without a tray: the icon is an extra, launching again also opens the window
-            match tray::Tray::new(app.handle()) {
+            let tray = match tray::Tray::new(app.handle()) {
                 Ok(tray) => {
                     app.manage(tray);
+                    true
                 }
-                Err(e) => log::write(format!("tray unavailable: {e}")),
+                Err(e) => {
+                    log::write(format!("tray unavailable: {e}"));
+                    false
+                }
+            };
+            // started with the system the app waits in the tray; the window starts hidden for that
+            if !(autostart::launched() && tray) {
+                tray::show_window(app.handle());
             }
             Ok(())
         })
@@ -72,7 +93,7 @@ pub fn run() {
             graphs::graph_create,
             graphs::graph_save,
             graphs::graph_rename,
-            graphs::graph_set_sliders,
+            graphs::graph_set_prefs,
             graphs::graph_delete,
             graphs::graphs_reorder,
             cables::cables_list,
@@ -89,6 +110,7 @@ pub fn run() {
             engine::engine_volume,
             settings::settings_get,
             settings::settings_set,
+            autostart::autostart_supported,
             platform,
             app_quit,
         ])
