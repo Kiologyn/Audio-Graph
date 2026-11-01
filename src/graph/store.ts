@@ -46,6 +46,7 @@ type GraphState = {
   setApp: (id: string, app: AppRef | null) => void;
   setVolume: (id: string, volume: number) => void;
   setDelay: (id: string, delay: number) => void;
+  setBalance: (id: string, balance: number) => void;
   undo: () => void;
   redo: () => void;
 };
@@ -77,7 +78,7 @@ function makeNode(kind: AudioNodeKind, position: XYPosition, label?: string): Au
     id: crypto.randomUUID(),
     type: "audio",
     position,
-    data: { kind, label: label ?? t(NODE_KINDS[kind].defaultLabel), sink: null, source: null, cable: null, app: null, volume: 1, delay: 0 },
+    data: { kind, label: label ?? t(NODE_KINDS[kind].defaultLabel), sink: null, source: null, cable: null, app: null, volume: 1, delay: 0, balance: 0 },
   };
 }
 
@@ -173,6 +174,7 @@ export const useGraph = create<GraphState>()((set, get) => {
           showDelay: doc.showDelay ?? false,
           delayLimit: doc.delayLimit ?? 0.5,
           startOnLaunch: doc.startOnLaunch ?? false,
+          showBalance: doc.showBalance ?? false,
         },
         viewport: doc.viewport,
         nodes: nodesFromDoc(doc.nodes),
@@ -282,6 +284,13 @@ export const useGraph = create<GraphState>()((set, get) => {
       record(`delay:${id}`);
       set({
         nodes: get().nodes.map((n) => (n.id === id ? { ...n, data: { ...n.data, delay } } : n)),
+      });
+    },
+
+    setBalance: (id, balance) => {
+      record(`balance:${id}`);
+      set({
+        nodes: get().nodes.map((n) => (n.id === id ? { ...n, data: { ...n.data, balance } } : n)),
       });
     },
 

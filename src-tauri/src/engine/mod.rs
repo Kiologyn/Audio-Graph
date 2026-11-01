@@ -125,6 +125,8 @@ enum Msg {
     Toggle,
     /// A volume slider is moving: apply at once without waiting for autosave
     Volume { graph: String, node: String, volume: f32 },
+    /// A balance slider is moving, the same way
+    Balance { graph: String, node: String, balance: f32 },
     /// Settings changed: message and tray language, turning cables off
     Settings { disable_idle_cables: bool },
     /// App exit: stop everything, give apps back their devices and reply
@@ -293,6 +295,13 @@ fn supervise(
                         }
                     }
                 }
+                Msg::Balance { graph, node, balance } => {
+                    for g in running.iter_mut().chain(opened.as_mut()).filter(|g| g.id == graph) {
+                        if let Some(n) = g.nodes.iter_mut().find(|n| n.id == node) {
+                            n.balance = balance;
+                        }
+                    }
+                }
                 Msg::Toggle => {
                     if let Some(o) = &opened {
                         if running.iter().any(|r| r.id == o.id) {
@@ -458,6 +467,15 @@ pub fn engine_start(engine: State<Engine>, graphs: State<GraphStore>, id: String
 #[tauri::command]
 pub fn engine_stop(engine: State<Engine>, id: Option<String>) {
     engine.send(Msg::Stop(id));
+}
+
+#[tauri::command]
+pub fn engine_balance(engine: State<Engine>, graph: String, node: String, balance: f32) {
+    engine.send(Msg::Balance {
+        graph,
+        node,
+        balance: balance.clamp(-1.0, 1.0),
+    });
 }
 
 #[tauri::command]

@@ -9,7 +9,7 @@
 //! devices, app devices and app volumes are journaled before a change and
 //! restored after the graph stops, or, if the app is silent, when it opens audio.
 
-use super::plan::{AppRoute, Plan, SystemRoute, Target, VirtualCable, VIRTUAL_PREFIX};
+use super::plan::{AppRoute, Gain, Plan, SystemRoute, Target, VirtualCable, VIRTUAL_PREFIX};
 use super::{AppState, AppStatus, DeviceError, StreamStatus};
 use crate::apps::linux::{is_app_stream, is_running};
 use crate::pulse::{self, Device, Pulse, Stream};
@@ -688,7 +688,7 @@ impl Backend {
     /// Loopbacks between devices per the plan's streams
     fn apply_links(&mut self, plan: &Plan, snap: &Snapshot) -> Vec<StreamStatus> {
         // link → volume, latency
-        let mut wanted: BTreeMap<(String, String), (f32, u32)> = BTreeMap::new();
+        let mut wanted: BTreeMap<(String, String), (Gain, u32)> = BTreeMap::new();
         for stream in &plan.streams {
             for source in &stream.sources {
                 let latency = LATENCY_MS + (source.delay * 1000.0).round() as u32;
@@ -764,9 +764,11 @@ impl Backend {
         for (key, (gain, _)) in &wanted {
             let Some(link) = self.links.get(key) else { continue };
             let Some(input) = link_input(&inputs, link.module) else { continue };
-            let volume = pulse::linear(input.volume.len(), *gain);
+            let volume = pulse::linear_balanced(&input.channel_map, *gain);
             // the server's volume step is 1/65536 of 100%: compare with some slack
-            if input.volume.avg().0.abs_diff(volume.avg().0) > 64 {
+            let differs = input.volume.len() != volume.len()
+                || input.volume.get().iter().zip(volume.get()).any(|(a, b)| a.0.abs_diff(b.0) > 64);
+            if differs {
                 let _ = self.pulse().and_then(|p| p.set_sink_input_volume(input.index, &volume));
             }
         }
@@ -885,6 +887,12 @@ mod tests {
     /// The average level (RMS) of what sounds on the input device while play_into plays
     /// a sine with amplitude 0.5 into the output device
     fn tone_rms(play_into: &str, record_from: &str) -> f32 {
+        let [left, right] = tone_rms_channels(play_into, record_from);
+        ((left * left + right * right) / 2.0).sqrt()
+    }
+
+    /// The same per channel: left and right
+    fn tone_rms_channels(play_into: &str, record_from: &str) -> [f32; 2] {
         let mut rec = Command::new("parec")
             .args(["--device", record_from, "--raw", "--format=s16le", "--rate=48000", "--channels=2", "--latency-msec=20"])
             .stdout(Stdio::piped())
@@ -915,7 +923,11 @@ mod tests {
             .chunks_exact(2)
             .map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 32768.0)
             .collect();
-        (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
+        let channel = |ch: usize| {
+            let values: Vec<f32> = samples.iter().skip(ch).step_by(2).copied().collect();
+            (values.iter().map(|s| s * s).sum::<f32>() / values.len() as f32).sqrt()
+        };
+        [channel(0), channel(1)]
     }
 
     fn cable() -> VirtualCable {
@@ -936,8 +948,8 @@ mod tests {
         let plan = Plan {
             virtual_cables: vec![cable()],
             streams: vec![
-                PlanStream { output: false, sink: "audiograph.t1".into(), sources: vec![Source { device: "agtest.mic.src".into(), gain: 1.0, delay: 0.0 }] },
-                PlanStream { output: true, sink: "agtest.out".into(), sources: vec![Source { device: "audiograph.t1.out".into(), gain: 0.5, delay: 0.0 }] },
+                PlanStream { output: false, sink: "audiograph.t1".into(), sources: vec![Source { device: "agtest.mic.src".into(), gain: [1.0; 2], delay: 0.0 }] },
+                PlanStream { output: true, sink: "agtest.out".into(), sources: vec![Source { device: "audiograph.t1.out".into(), gain: [0.5; 2], delay: 0.0 }] },
             ],
             ..Plan::default()
         };
@@ -962,7 +974,7 @@ mod tests {
         let louder = Plan {
             streams: vec![
                 plan.streams[0].clone(),
-                PlanStream { output: true, sink: "agtest.out".into(), sources: vec![Source { device: "audiograph.t1.out".into(), gain: 1.0, delay: 0.0 }] },
+                PlanStream { output: true, sink: "agtest.out".into(), sources: vec![Source { device: "audiograph.t1.out".into(), gain: [1.0; 2], delay: 0.0 }] },
             ],
             ..plan.clone()
         };
@@ -970,6 +982,19 @@ mod tests {
         let rms = tone_rms("agtest.mic", "agtest.out.monitor");
         println!("RMS at 100%: {rms:.3}");
         assert!((rms - 0.354).abs() < 0.04, "RMS {rms}");
+
+        // balance to the left: the right channel a quarter as loud
+        let balanced = Plan {
+            streams: vec![
+                plan.streams[0].clone(),
+                PlanStream { output: true, sink: "agtest.out".into(), sources: vec![Source { device: "audiograph.t1.out".into(), gain: [1.0, 0.25], delay: 0.0 }] },
+            ],
+            ..plan.clone()
+        };
+        ticks(&mut backend, &balanced);
+        let [left, right] = tone_rms_channels("agtest.mic", "agtest.out.monitor");
+        println!("RMS with the balance to the left: {left:.3} {right:.3}");
+        assert!((left - 0.354).abs() < 0.04 && (right / left - 0.25).abs() < 0.03, "RMS {left} {right}");
 
         // stop: no cable, no loopbacks
         ticks(&mut backend, &Plan::default());
@@ -983,7 +1008,7 @@ mod tests {
         let _devices = Devices::new();
         let (mut backend, _) = backend();
         let plan = |delay| Plan {
-            streams: vec![PlanStream { output: true, sink: "agtest.out".into(), sources: vec![Source { device: "agtest.mic.src".into(), gain: 1.0, delay }] }],
+            streams: vec![PlanStream { output: true, sink: "agtest.out".into(), sources: vec![Source { device: "agtest.mic.src".into(), gain: [1.0; 2], delay }] }],
             ..Plan::default()
         };
         let loopback = || our_modules().into_iter().find(|m| m.contains("module-loopback"));
@@ -1148,7 +1173,7 @@ mod tests {
         let (mut backend, _) = backend();
         let plan = |label: &str| Plan {
             virtual_cables: vec![VirtualCable { label: label.into(), ..cable() }],
-            streams: vec![PlanStream { output: true, sink: "agtest.out".into(), sources: vec![Source { device: "audiograph.t1.out".into(), gain: 1.0, delay: 0.0 }] }],
+            streams: vec![PlanStream { output: true, sink: "agtest.out".into(), sources: vec![Source { device: "audiograph.t1.out".into(), gain: [1.0; 2], delay: 0.0 }] }],
             ..Plan::default()
         };
         ticks(&mut backend, &plan("First"));
@@ -1178,8 +1203,8 @@ mod tests {
         let plan = |label: &str| Plan {
             virtual_cables: vec![VirtualCable { label: label.into(), ..cable() }],
             streams: vec![
-                PlanStream { output: false, sink: "audiograph.t1".into(), sources: vec![Source { device: "agtest.mic.src".into(), gain: 1.0, delay: 0.0 }] },
-                PlanStream { output: true, sink: "agtest.out".into(), sources: vec![Source { device: "audiograph.t1.out".into(), gain: 0.7, delay: 0.0 }] },
+                PlanStream { output: false, sink: "audiograph.t1".into(), sources: vec![Source { device: "agtest.mic.src".into(), gain: [1.0; 2], delay: 0.0 }] },
+                PlanStream { output: true, sink: "agtest.out".into(), sources: vec![Source { device: "audiograph.t1.out".into(), gain: [0.7; 2], delay: 0.0 }] },
             ],
             routes: vec![AppRoute {
                 node: "app".into(),

@@ -3,7 +3,7 @@
 //! grows or shrinks; it is kept near the target by dropping or repeating one frame at a time.
 //! An output's delay is a bigger reserve: the sound waits in the buffer that much longer.
 
-use super::plan::MAX_DELAY;
+use super::plan::{Gain, MAX_DELAY};
 use super::ring::{ring, Consumer, Producer};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -32,8 +32,8 @@ pub fn link() -> (Producer, LinkReader) {
             ring: consumer,
             primed: false,
             average: 0.0,
-            gain: Arc::new(AtomicU32::new(1.0f32.to_bits())),
-            current_gain: 1.0,
+            gain: Arc::new([AtomicU32::new(1.0f32.to_bits()), AtomicU32::new(1.0f32.to_bits())]),
+            current_gain: [1.0; CHANNELS],
             delay: Arc::new(AtomicU32::new(0)),
             applied_delay: 0,
         },
@@ -46,17 +46,19 @@ pub struct LinkReader {
     primed: bool,
     /// Average reserve over the last ~half second: the instant one jumps with the packets
     average: f32,
-    /// The link's volume; the engine thread changes it on the fly, the output stream follows smoothly
-    gain: Arc<AtomicU32>,
-    current_gain: f32,
+    /// The link's volume per channel; the engine thread changes it on the fly, the output stream follows smoothly
+    gain: Arc<[AtomicU32; CHANNELS]>,
+    current_gain: Gain,
     /// The delay in frames; the engine thread changes it, the output stream applies it at the next packet
     delay: Arc<AtomicU32>,
     applied_delay: usize,
 }
 
 impl LinkReader {
-    pub fn set_gain(&self, gain: f32) {
-        self.gain.store(gain.to_bits(), Ordering::Relaxed);
+    pub fn set_gain(&self, gain: Gain) {
+        for (g, v) in self.gain.iter().zip(gain) {
+            g.store(v.to_bits(), Ordering::Relaxed);
+        }
     }
 
     /// The output's delay in seconds, at most plan::MAX_DELAY
@@ -67,12 +69,13 @@ impl LinkReader {
 
     /// Mixes the link's sound into out (frames of CHANNELS values)
     pub fn mix_into(&mut self, out: &mut [f32]) {
-        let (from, to) = (self.current_gain, f32::from_bits(self.gain.load(Ordering::Relaxed)));
+        let to: Gain = std::array::from_fn(|ch| f32::from_bits(self.gain[ch].load(Ordering::Relaxed)));
+        let from = self.current_gain;
         self.current_gain = to;
         self.mix_frames(out, from, to);
     }
 
-    fn mix_frames(&mut self, out: &mut [f32], from: f32, to: f32) {
+    fn mix_frames(&mut self, out: &mut [f32], from: Gain, to: Gain) {
         let need = out.len() / CHANNELS;
         let delay = self.delay.load(Ordering::Relaxed) as usize;
         if delay != self.applied_delay {
@@ -118,8 +121,8 @@ impl LinkReader {
             let last: [f32; CHANNELS] = std::array::from_fn(|ch| self.ring.peek((need - 2) * CHANNELS + ch));
             let n = (need - 1) * CHANNELS;
             self.ring.mix_into_scaled(&mut out[..n], from, to);
-            for (o, s) in out[n..].iter_mut().zip(last) {
-                *o += s * to;
+            for ((o, s), g) in out[n..].iter_mut().zip(last).zip(to) {
+                *o += s * g;
             }
             return;
         }
@@ -226,6 +229,19 @@ mod tests {
     }
 
     #[test]
+    fn balance_quiets_one_channel() {
+        let (producer, mut reader) = link();
+        reader.set_gain([1.0, 0.25]);
+        producer.push(&vec![0.5f32; TARGET * 4 * CHANNELS]);
+        let mut out = vec![0.0f32; 480 * CHANNELS];
+        reader.mix_into(&mut out);
+        // the right channel ramps down over the first packet, then stays a quarter of the left
+        out.fill(0.0);
+        reader.mix_into(&mut out);
+        assert!(out.chunks(2).all(|f| f[0] == 0.5 && (f[1] - 0.125).abs() < 1e-6));
+    }
+
+    #[test]
     fn gain_ramps_without_jump() {
         let (producer, mut reader) = link();
         producer.push(&vec![0.5f32; TARGET * 4 * CHANNELS]);
@@ -233,7 +249,7 @@ mod tests {
         reader.mix_into(&mut out);
         assert!(out.iter().all(|&s| s == 0.5));
         // volume 50%: smoothly from 0.5 to 0.25 over one packet, then a steady 0.25
-        reader.set_gain(0.5);
+        reader.set_gain([0.5; CHANNELS]);
         out.fill(0.0);
         reader.mix_into(&mut out);
         assert_eq!(out[0], 0.5);

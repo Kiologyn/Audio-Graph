@@ -56,6 +56,7 @@ function snapshot(): GraphDoc | null {
     showDelay: meta.showDelay,
     delayLimit: meta.delayLimit,
     startOnLaunch: meta.startOnLaunch,
+    showBalance: meta.showBalance,
   };
 }
 
@@ -73,6 +74,7 @@ const contentKey = (doc: GraphDoc | null) =>
         doc.showDelay,
         doc.delayLimit,
         doc.startOnLaunch,
+        doc.showBalance,
       ])
     : "";
 
@@ -126,12 +128,13 @@ useGraph.subscribe((state, prev) => {
 
 // ---------- library ----------
 
-const metaOf = ({ id, name, createdAt, updatedAt, showVolume, showDelay, delayLimit, startOnLaunch }: GraphDoc): GraphMeta => ({
+const metaOf = ({ id, name, createdAt, updatedAt, showVolume, showBalance, showDelay, delayLimit, startOnLaunch }: GraphDoc): GraphMeta => ({
   id,
   name,
   createdAt,
   updatedAt,
   showVolume,
+  showBalance,
   showDelay,
   delayLimit,
   startOnLaunch,

@@ -202,6 +202,17 @@ function GraphOptions({ graph, onExport }: { graph: GraphMeta; onExport: (result
                 <small>{t("graph_volume_sliders_hint")}</small>
               </span>
             </label>
+            <label className="ag-graph-options__check">
+              <input
+                type="checkbox"
+                checked={graph.showBalance ?? false}
+                onChange={(e) => setPrefs(graph.id, { showBalance: e.currentTarget.checked })}
+              />
+              <span>
+                {t("graph_balance_sliders")}
+                <small>{t("graph_balance_sliders_hint")}</small>
+              </span>
+            </label>
             <div className="ag-graph-options__row">
               <label className="ag-graph-options__check">
                 <input

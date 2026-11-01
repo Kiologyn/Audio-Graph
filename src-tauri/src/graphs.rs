@@ -99,6 +99,9 @@ pub struct GraphNode {
     /// An output's delay in seconds relative to the other outputs: plus plays later, minus earlier
     #[serde(default)]
     pub delay: f32,
+    /// Left-right balance from -1 (left only) to 1 (right only); engine streams only
+    #[serde(default)]
+    pub balance: f32,
     pub position: Position,
 }
 
@@ -136,6 +139,9 @@ pub struct Graph {
     /// Start the graph when the app starts with the system
     #[serde(default)]
     pub start_on_launch: bool,
+    /// Balance sliders on this graph's nodes; while off, its balances aren't applied
+    #[serde(default)]
+    pub show_balance: bool,
 }
 
 /// The widest delay slider range: delays relative to each other add up, so two of these must fit
@@ -161,6 +167,7 @@ pub struct GraphMeta {
     pub show_delay: bool,
     pub delay_limit: f32,
     pub start_on_launch: bool,
+    pub show_balance: bool,
 }
 
 impl From<&Graph> for GraphMeta {
@@ -174,6 +181,7 @@ impl From<&Graph> for GraphMeta {
             show_delay: g.show_delay,
             delay_limit: g.delay_limit,
             start_on_launch: g.start_on_launch,
+            show_balance: g.show_balance,
         }
     }
 }
@@ -186,6 +194,7 @@ pub struct GraphPrefs {
     pub show_delay: bool,
     pub delay_limit: f32,
     pub start_on_launch: bool,
+    pub show_balance: bool,
 }
 
 /// What a graph export file says about itself
@@ -352,6 +361,7 @@ pub fn graph_create(
         show_delay: show_delay.unwrap_or(false),
         delay_limit: half_second(),
         start_on_launch: false,
+        show_balance: false,
     };
     store.write(&graph)?;
     store.set_last_opened(Some(&graph.id))?;
@@ -395,6 +405,7 @@ pub fn graph_set_prefs(store: State<GraphStore>, engine: State<Engine>, id: Stri
     graph.show_delay = prefs.show_delay;
     graph.delay_limit = prefs.delay_limit.clamp(0.001, MAX_DELAY_LIMIT);
     graph.start_on_launch = prefs.start_on_launch;
+    graph.show_balance = prefs.show_balance;
     graph.updated_at = now_ms();
     store.write(&graph)?;
     engine.saved(&graph);

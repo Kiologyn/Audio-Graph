@@ -47,12 +47,29 @@ pub struct AppRoute {
     pub volume: f32,
 }
 
+/// Volume of the left and the right channel
+pub type Gain = [f32; 2];
+
+/// A node's volume with its balance: minus quiets the right channel, plus the left one
+fn balanced(volume: f32, balance: f32) -> Gain {
+    let b = balance.clamp(-1.0, 1.0);
+    [volume * (1.0 - b.max(0.0)), volume * (1.0 + b.min(0.0))]
+}
+
+fn times(a: Gain, b: Gain) -> Gain {
+    [a[0] * b[0], a[1] * b[1]]
+}
+
+fn louder(a: Gain, b: Gain) -> Gain {
+    [a[0].max(b[0]), a[1].max(b[1])]
+}
+
 /// A recording device in a stream and the volume it is mixed in with
 #[derive(Clone, Debug, PartialEq)]
 pub struct Source {
     pub device: String,
     /// The product of node volumes along the path: input or cable, internal cables, output
-    pub gain: f32,
+    pub gain: Gain,
     /// How much later the sound is played, in seconds. After compile it is the output node's
     /// delay as set; apply_delays turns it into what the engine plays (never negative)
     pub delay: f32,
@@ -183,6 +200,8 @@ struct Compiler<'a> {
     /// Taking the "System" node replacement into account
     defaults: Defaults,
     issues: Vec<Issue>,
+    /// The graph's balance sliders are on: while off, its balances aren't applied
+    balance: bool,
 }
 
 impl<'a> Compiler<'a> {
@@ -197,6 +216,11 @@ impl<'a> Compiler<'a> {
                 Some(id) => self.cables.get(id.as_str()).map_or(Role::Deleted, |c| Role::Cable(c)),
             },
         }
+    }
+
+    /// What a node does to the sound passing through the engine: its volume and balance
+    fn gain(&self, node: &GraphNode) -> Gain {
+        balanced(node.volume, if self.balance { node.balance } else { 0.0 })
     }
 
     fn issue(&mut self, nodes: &[&str], edges: &[&str], message: impl Into<String>) {
@@ -312,19 +336,19 @@ impl<'a> Compiler<'a> {
         node: &'a GraphNode,
         engine_edges: &[&'a GraphEdge],
         visited: &mut HashSet<&'a str>,
-        gain: f32,
-        out: &mut BTreeMap<String, f32>,
+        gain: Gain,
+        out: &mut BTreeMap<String, Gain>,
     ) {
         for edge in engine_edges.iter().filter(|e| e.target == node.id) {
             let source = self.nodes[edge.source.as_str()];
-            let gain = gain * source.volume;
+            let gain = times(gain, self.gain(source));
             if matches!(self.role(source), Role::Bus) {
                 if visited.insert(source.id.as_str()) {
                     self.collect_sources(source, engine_edges, visited, gain, out);
                 }
             } else if let Some(id) = self.source_device(source) {
                 let g = out.entry(id).or_insert(gain);
-                *g = g.max(gain);
+                *g = louder(*g, gain);
             }
         }
     }
@@ -419,6 +443,7 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
         cables: cables.iter().map(|c| (c.id.as_str(), c)).collect(),
         defaults: defaults.clone(),
         issues: Vec::new(),
+        balance: graph.show_balance,
     };
     let node_ids: Vec<&str> = graph.nodes.iter().map(|n| n.id.as_str()).collect();
     let mut edges: Vec<&GraphEdge> = graph
@@ -470,6 +495,10 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
             [edge] => {
                 let target = c.nodes[edge.target.as_str()];
                 let render = c.app_render(edge, target);
+                // the system plays this sound: balance (in the system only for a whole device) doesn't apply
+                if render.is_some() && target.kind == NodeKind::Output && c.balance && target.balance != 0.0 {
+                    c.issue(&[&target.id, &node.id], &[&edge.id], tr!("issue_balance_direct"));
+                }
                 if render.is_some() && target.kind == NodeKind::Output && target.delay != 0.0 {
                     undelayed.push(Issue {
                         nodes: vec![target.id.clone(), node.id.clone()],
@@ -583,7 +612,7 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
         .filter(|e| !is_routed(&c, &e.source) && !is_routed(&c, &e.target))
         .collect();
     // device → (path volume, delay) per output device
-    let mut streams: BTreeMap<String, BTreeMap<String, (f32, f32)>> = BTreeMap::new();
+    let mut streams: BTreeMap<String, BTreeMap<String, (Gain, f32)>> = BTreeMap::new();
     let mut outputs = BTreeSet::new();
     for node in &graph.nodes {
         let is_sink = matches!(c.role(node), Role::Output(_) | Role::Cable(_) | Role::Deleted);
@@ -591,7 +620,7 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
             continue;
         }
         // a cable's volume applies to the sound taken from it, so a receiving cable doesn't multiply it in
-        let sink_volume = if matches!(c.role(node), Role::Output(_)) { node.volume } else { 1.0 };
+        let sink_volume = if matches!(c.role(node), Role::Output(_)) { c.gain(node) } else { [1.0; 2] };
         // only an output node delays: a cable passes its sound on at once
         let delay = if matches!(c.role(node), Role::Output(_)) { node.delay } else { 0.0 };
         let mut sources = BTreeMap::new();
@@ -635,13 +664,13 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
 
 /// Adds a source to an output device's sources. The same device on several paths sounds once:
 /// the loudest path counts, and the longest delay (nodes of one device delayed differently)
-fn mix_in(sources: &mut BTreeMap<String, (f32, f32)>, device: String, gain: f32, delay: f32) {
+fn mix_in(sources: &mut BTreeMap<String, (Gain, f32)>, device: String, gain: Gain, delay: f32) {
     let (g, d) = sources.entry(device).or_insert((gain, delay));
-    *g = g.max(gain);
+    *g = louder(*g, gain);
     *d = d.max(delay);
 }
 
-fn into_streams(streams: BTreeMap<String, BTreeMap<String, (f32, f32)>>, outputs: &BTreeSet<String>) -> Vec<Stream> {
+fn into_streams(streams: BTreeMap<String, BTreeMap<String, (Gain, f32)>>, outputs: &BTreeSet<String>) -> Vec<Stream> {
     streams
         .into_iter()
         .filter(|(_, sources)| !sources.is_empty())
@@ -787,7 +816,7 @@ fn reaches(links: &HashMap<String, BTreeSet<String>>, from: &str, to: &str) -> b
 
 /// One plan for the engine from the plans of running graphs (after compile_all)
 pub fn merge(plans: &[Plan]) -> Plan {
-    let mut streams: BTreeMap<String, BTreeMap<String, (f32, f32)>> = BTreeMap::new();
+    let mut streams: BTreeMap<String, BTreeMap<String, (Gain, f32)>> = BTreeMap::new();
     let mut outputs = BTreeSet::new();
     for stream in plans.iter().flat_map(|p| &p.streams) {
         if stream.output {
@@ -832,6 +861,7 @@ mod tests {
             app: None,
             volume: 1.0,
             delay: 0.0,
+            balance: 0.0,
             position: Position { x: 0.0, y: 0.0 },
         }
     }
@@ -887,6 +917,7 @@ mod tests {
             show_delay: false,
             delay_limit: 0.5,
             start_on_launch: false,
+            show_balance: false,
         }
     }
     fn defaults() -> Defaults {
@@ -904,7 +935,7 @@ mod tests {
                 .iter()
                 .map(|s| Source {
                     device: s.to_string(),
-                    gain: 1.0,
+                    gain: [1.0; 2],
                     delay: 0.0,
                 })
                 .collect(),
@@ -1096,8 +1127,9 @@ mod tests {
         let gains: Vec<(String, String, f32)> = plan
             .streams
             .iter()
-            .flat_map(|s| s.sources.iter().map(|src| (s.sink.clone(), src.device.clone(), src.gain)))
+            .flat_map(|s| s.sources.iter().map(|src| (s.sink.clone(), src.device.clone(), src.gain[0])))
             .collect();
+        assert!(plan.streams.iter().flat_map(|s| &s.sources).all(|s| s.gain[0] == s.gain[1]));
         assert_eq!(
             gains,
             vec![
@@ -1107,6 +1139,27 @@ mod tests {
             ]
         );
         assert_eq!(plan.routes[0].volume, 0.5);
+    }
+
+    #[test]
+    fn balance_multiplies_per_channel() {
+        // microphone 80% leaning left (balance -0.5) → headphones leaning right (0.25)
+        let mut mic = input("mic", dev("mic"));
+        (mic.volume, mic.balance) = (0.8, -0.5);
+        let mut hp = output("o", dev("hp"));
+        hp.balance = 0.25;
+        let mut g = graph(vec![mic, hp, app("a", "a.exe"), output("o2", dev("spk"))], &[("mic", "o"), ("a", "o2")]);
+        let gain = |g: &Graph| compile(g, &[], &defaults()).streams[0].sources[0].gain;
+        // while the graph's balance sliders are off, balances aren't applied
+        assert_eq!(gain(&g), [0.8, 0.8]);
+        g.show_balance = true;
+        assert_eq!(gain(&g), [0.8 * 0.75, 0.8 * 0.5]);
+
+        // an app straight into an output: the system plays it, the balance can't apply
+        g.nodes[3].balance = 1.0;
+        let plan = compile(&g, &[], &defaults());
+        assert_eq!(plan.issues.len(), 1);
+        assert_eq!(plan.issues[0].nodes, ["o2", "a"]);
     }
 
     fn named(mut g: Graph, id: &str) -> Graph {

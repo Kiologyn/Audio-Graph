@@ -61,17 +61,20 @@ impl Consumer {
         n
     }
 
-    /// Like mix_into, but with volume going smoothly from from to to: a volume jump would click
-    pub fn mix_into_scaled(&self, out: &mut [f32], from: f32, to: f32) -> usize {
-        if from == 1.0 && to == 1.0 {
+    /// Like mix_into for frames of C channels, with each channel's volume going smoothly
+    /// from from to to: a volume jump would click
+    pub fn mix_into_scaled<const C: usize>(&self, out: &mut [f32], from: [f32; C], to: [f32; C]) -> usize {
+        if from == [1.0; C] && to == [1.0; C] {
             return self.mix_into(out);
         }
         let r = &*self.0;
         let read = r.read.load(Ordering::Relaxed);
         let n = out.len().min(self.len());
-        let step = if n > 1 { (to - from) / (n - 1) as f32 } else { 0.0 };
+        let frames = n / C;
+        let step: [f32; C] = std::array::from_fn(|ch| if frames > 1 { (to[ch] - from[ch]) / (frames - 1) as f32 } else { 0.0 });
         for (i, o) in out[..n].iter_mut().enumerate() {
-            *o += unsafe { *r.data[(read + i) % r.data.len()].get() } * (from + step * i as f32);
+            let (frame, ch) = (i / C, i % C);
+            *o += unsafe { *r.data[(read + i) % r.data.len()].get() } * (from[ch] + step[ch] * frame as f32);
         }
         r.read.store(read.wrapping_add(n), Ordering::Release);
         n

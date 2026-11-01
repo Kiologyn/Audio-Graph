@@ -10,8 +10,8 @@ export const graphsApi = {
     invoke<GraphDoc>("graph_create", { name, nodes, edges, showVolume, showDelay }),
   save: (graph: GraphDoc) => invoke<GraphMeta>("graph_save", { graph }),
   rename: (id: string, name: string) => invoke<GraphMeta>("graph_rename", { id, name }),
-  setPrefs: (id: string, { showVolume, showDelay, delayLimit, startOnLaunch }: GraphPrefs) =>
-    invoke<GraphMeta>("graph_set_prefs", { id, prefs: { showVolume, showDelay, delayLimit, startOnLaunch } }),
+  setPrefs: (id: string, { showVolume, showBalance, showDelay, delayLimit, startOnLaunch }: GraphPrefs) =>
+    invoke<GraphMeta>("graph_set_prefs", { id, prefs: { showVolume, showBalance, showDelay, delayLimit, startOnLaunch } }),
   remove: (id: string) => invoke<void>("graph_delete", { id }),
   reorder: (ids: string[]) => invoke<void>("graphs_reorder", { ids }),
   exportTo: (id: string, path: string) => invoke<void>("graph_export", { id, path }),

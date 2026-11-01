@@ -112,6 +112,7 @@ pub fn run() {
             engine::engine_start,
             engine::engine_stop,
             engine::engine_volume,
+            engine::engine_balance,
             settings::settings_get,
             settings::settings_set,
             autostart::autostart_supported,

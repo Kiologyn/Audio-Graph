@@ -1089,6 +1089,23 @@ button {
   user-select: none;
 }
 
+/* the balance row: L and R around the slider, the side and percentage on the right */
+.ag-balance {
+  gap: 6px;
+  margin-top: 6px;
+}
+
+/* the slider takes what is left: its own width would make the node wider than the volume row */
+.ag-balance input {
+  width: 0;
+}
+
+.ag-balance__edge {
+  font-size: 10.5px;
+  color: var(--ag-text-dim);
+  user-select: none;
+}
+
 /* gain above 100% is done by the engine only, and it shows */
 .ag-volume__value.is-boost {
   color: var(--accent);
@@ -1125,7 +1142,8 @@ button {
   user-select: none;
 }
 
-.ag-delay input {
+.ag-delay input,
+.ag-balance input {
   background: linear-gradient(
     to right,
     var(--ag-surface-2) var(--from),
