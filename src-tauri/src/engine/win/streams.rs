@@ -2,7 +2,7 @@
 //! gets its own stream. Recording hands packets to all links, output mixes its links.
 
 use super::super::link::{link, LinkReader, CHANNELS, RATE};
-use super::super::plan::Stream;
+use super::super::plan::{Stream, LOOPBACK_PREFIX};
 use super::super::ring::Producer;
 use super::super::{DeviceError, StreamStatus};
 use crate::com::{wide, ComGuard};
@@ -16,7 +16,8 @@ use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Media::Audio::{
     IAudioCaptureClient, IAudioClient, IAudioRenderClient, IMMDeviceEnumerator, MMDeviceEnumerator,
     AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_E_DEVICE_INVALIDATED, AUDCLNT_E_DEVICE_IN_USE, AUDCLNT_SHAREMODE_SHARED,
-    AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+    AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_EVENTCALLBACK, AUDCLNT_STREAMFLAGS_LOOPBACK,
+    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
     DEVICE_STATE_ACTIVE, WAVEFORMATEX,
 };
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_ALL};
@@ -123,7 +124,8 @@ impl<T: Send + 'static> Worker<T> {
 
 fn device_error<T: Send + 'static>(device: &str, worker: Option<&Worker<T>>) -> Option<DeviceError> {
     worker.and_then(|w| w.error()).map(|message| DeviceError {
-        device: device.to_string(),
+        // a loopback's errors belong to its output device: the interface finds the node by it
+        device: device.strip_prefix(LOOPBACK_PREFIX).unwrap_or(device).to_string(),
         message,
     })
 }
@@ -232,8 +234,13 @@ impl Drop for ProAudio {
     }
 }
 
-/// Opens the device and sets up a stream in the engine format
+/// Opens the device and sets up a stream in the engine format.
+/// "loopback:<output device>" opens the output device to record what is played into it
 fn open(device: &str) -> Result<(IAudioClient, Event), String> {
+    let (device, flags) = match device.strip_prefix(LOOPBACK_PREFIX) {
+        Some(render) => (render, FLAGS | AUDCLNT_STREAMFLAGS_LOOPBACK),
+        None => (device, FLAGS),
+    };
     unsafe {
         let enumerator: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).map_err(describe)?;
         let id = wide(device);
@@ -244,7 +251,7 @@ fn open(device: &str) -> Result<(IAudioClient, Event), String> {
         let client: IAudioClient = mm.Activate(CLSCTX_ALL, None).map_err(describe)?;
         let event = Event(CreateEventW(None, false, false, None).map_err(describe)?);
         client
-            .Initialize(AUDCLNT_SHAREMODE_SHARED, FLAGS, BUFFER_HNS, 0, &FORMAT, None)
+            .Initialize(AUDCLNT_SHAREMODE_SHARED, flags, BUFFER_HNS, 0, &FORMAT, None)
             .map_err(describe)?;
         client.SetEventHandle(event.0).map_err(describe)?;
         Ok((client, event))
@@ -342,7 +349,17 @@ unsafe fn render_loop(
 mod tests {
     use super::super::super::ring::ring;
     use super::*;
-    use crate::devices::{list, Flow};
+    use crate::devices::{list, DeviceState, Flow};
+
+    /// Line 1 of Virtual Audio Cable: one line, so the tone played into its input comes out of its output
+    fn vac(flow: Flow) -> String {
+        list()
+            .unwrap()
+            .into_iter()
+            .find(|d| d.name.starts_with("Line 1 (Virtual Audio Cable") && d.flow == flow && d.state == DeviceState::Active)
+            .expect("no Virtual Audio Cable")
+            .id
+    }
 
     /// Plays a tone into the VAC input (Line 1) and listens to its output: checks recording, playback
     /// and the full latency. Only someone listening to that cable hears it:
@@ -350,26 +367,29 @@ mod tests {
     #[test]
     #[ignore]
     fn vac_loopback() {
-        let devices = list().unwrap();
-        let vac = |flow| {
-            devices
-                .iter()
-                .find(|d| d.name.contains("Virtual Audio Cable") && d.flow == flow)
-                .expect("no Virtual Audio Cable")
-                .id
-                .clone()
-        };
-        let (render_id, capture_id) = (vac(Flow::Render), vac(Flow::Capture));
+        tone_through(&vac(Flow::Render), &vac(Flow::Capture));
+    }
+
+    /// The same, but listens to the VAC input itself through WASAPI loopback, as for a cable without an output:
+    /// cargo test vac_input_loopback -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn vac_input_loopback() {
+        let render_id = vac(Flow::Render);
+        tone_through(&render_id, &format!("{LOOPBACK_PREFIX}{render_id}"));
+    }
+
+    fn tone_through(render_id: &str, capture_id: &str) {
 
         let mut capture = Worker::<Producer>::new();
         let (heard_in, heard) = ring(RATE * CHANNELS);
         lock(&capture.links).push(("test".into(), heard_in));
-        capture.supervise(&capture_id, capture_thread);
+        capture.supervise(capture_id, capture_thread);
 
         let mut render = Worker::<LinkReader>::new();
         let (tone, reader) = link();
         lock(&render.links).push(("test".into(), reader));
-        render.supervise(&render_id, render_thread);
+        render.supervise(render_id, render_thread);
         std::thread::sleep(Duration::from_millis(300));
         assert!(capture.error().is_none() && render.error().is_none(), "{:?} {:?}", capture.error(), render.error());
 

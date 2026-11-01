@@ -124,6 +124,7 @@
   "issue_no_input_device": "No input device selected",
   "issue_no_default_input": "The system has no default input device",
   "issue_cable_no_output": "Cable “{cable}” has no output selected",
+  "issue_cable_no_output_to_app": "Cable “{cable}” has no output selected, so its audio can go only to devices, not to apps or the default microphone. Pick the cable's output in the cable list",
   "issue_cable_deleted": "The cable was deleted from the cable list",
   "issue_no_output_device": "No output device selected",
   "issue_no_default_output": "The system has no default output device",

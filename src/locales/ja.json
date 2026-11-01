@@ -124,6 +124,7 @@
   "issue_no_input_device": "入力デバイスが選択されていません",
   "issue_no_default_input": "システムに既定の入力デバイスがありません",
   "issue_cable_no_output": "ケーブル「{cable}」の出力側が選択されていません",
+  "issue_cable_no_output_to_app": "ケーブル「{cable}」の出力側が選択されていないため、その音声はデバイスにしか送れず、アプリや既定のマイクには送れません。ケーブル一覧でケーブルの出力側を選んでください",
   "issue_cable_deleted": "ケーブルはケーブル一覧から削除されました",
   "issue_no_output_device": "出力デバイスが選択されていません",
   "issue_no_default_output": "システムに既定の出力デバイスがありません",

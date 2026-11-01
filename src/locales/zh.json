@@ -124,6 +124,7 @@
   "issue_no_input_device": "未选择输入设备",
   "issue_no_default_input": "系统没有默认输入设备",
   "issue_cable_no_output": "线缆“{cable}”未选择输出端",
+  "issue_cable_no_output_to_app": "线缆“{cable}”未选择输出端，因此其声音只能发送到设备，不能发送到应用或默认麦克风。请在线缆列表中选择该线缆的输出端",
   "issue_cable_deleted": "该线缆已从线缆列表中删除",
   "issue_no_output_device": "未选择输出设备",
   "issue_no_default_output": "系统没有默认输出设备",

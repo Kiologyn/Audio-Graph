@@ -93,6 +93,18 @@ pub struct VirtualCable {
 /// The prefix of virtual device names: it tells them apart from the system's devices
 pub const VIRTUAL_PREFIX: &str = "audiograph.";
 
+/// A stream source "loopback:<output device>" is the sound played into that output device
+/// (WASAPI loopback). It stands in for the output of a cable that has only its input chosen
+pub const LOOPBACK_PREFIX: &str = "loopback:";
+
+/// The recording device the engine reads a cable's sound from: its output, or without one
+/// the loopback of its input. Apps can't listen to a loopback, only the engine can
+fn cable_source(cable: &Cable) -> Option<String> {
+    device_id(&cable.capture)
+        .map(str::to_string)
+        .or_else(|| device_id(&cable.render).map(|id| format!("{LOOPBACK_PREFIX}{id}")))
+}
+
 /// Device names of a node's virtual cable: the output device and the input device.
 /// Matches virtualDeviceIds in src/platform.ts
 pub fn virtual_device_names(node_id: &str) -> (String, String) {
@@ -196,9 +208,9 @@ impl<'a> Compiler<'a> {
                 Some(id) => return Some(id.clone()),
                 None => self.issue(&[&node.id], &[], tr!("issue_no_default_input")),
             },
-            Role::Cable(cable) => match &cable.capture {
-                Some(DeviceRef::Device { id, .. }) => return Some(id.clone()),
-                _ => self.issue(&[&node.id], &[], tr!(
+            Role::Cable(cable) => match cable_source(cable) {
+                Some(id) => return Some(id),
+                None => self.issue(&[&node.id], &[], tr!(
                     "issue_cable_no_output",
                     cable = cable.name
                 )),
@@ -260,6 +272,12 @@ impl<'a> Compiler<'a> {
         let ids = [source.id.as_str(), edge.target.as_str()];
         match self.role(source) {
             Role::Input(Some(DeviceRef::Default)) => return Some(Target::Default),
+            // the system gives an app only a recording device, not a loopback of the cable's input
+            Role::Cable(cable) if device_id(&cable.capture).is_none() => self.issue(
+                &ids,
+                &[&edge.id],
+                tr!("issue_cable_no_output_to_app", cable = cable.name),
+            ),
             Role::Input(_) | Role::Cable(_) | Role::Deleted => return self.source_device(source).map(Target::Device),
             Role::Bus => self.issue(
                 &ids,
@@ -554,8 +572,8 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
         // a cable into itself: its input and output are one pair, sound would go round in circles.
         // It also happens implicitly: "default" is now the cable's input because "System" set it
         if let Some(cable) = cables.iter().find(|cb| device_id(&cb.render) == Some(sink.as_str())) {
-            if let Some(capture) = device_id(&cable.capture).filter(|id| sources.contains_key(*id)) {
-                sources.remove(capture);
+            if let Some(capture) = cable_source(cable).filter(|id| sources.contains_key(id)) {
+                sources.remove(&capture);
                 let into: Vec<&str> = engine_edges.iter().filter(|e| e.target == node.id).map(|e| e.id.as_str()).collect();
                 let message = if matches!(c.role(node), Role::Output(Some(DeviceRef::Default))) {
                     tr!(
@@ -1096,6 +1114,33 @@ mod tests {
         assert_eq!(route("player").render, Some(Target::Device(sink.clone())));
         assert_eq!(route("call").capture, Some(Target::Device(source.clone())));
         assert_eq!(plan.streams, vec![stream("audiograph.mix", &["mic"]), stream("hp", &["audiograph.mix.out"])]);
+    }
+
+    #[test]
+    fn cable_without_output_is_read_through_loopback() {
+        // the default output goes into the input of cable "c" that has no output chosen: the engine
+        // takes the sound played into its input and sends it to both outputs; an app can't hear it
+        let g = graph(
+            vec![system("sys"), cable_node("c", Some("c")), output("hp", dev("hp")), output("spk", dev("spk")), app("a", "a.exe")],
+            &[("sys", "c"), ("c", "hp"), ("c", "spk"), ("c", "a")],
+        );
+        let cables = [Cable { capture: None, ..cable("c", "c.in", "") }];
+        let plan = compile(&g, &cables, &defaults());
+        assert_eq!(plan.system.unwrap().render, Some("c.in".into()));
+        assert_eq!(plan.streams, vec![stream("hp", &["loopback:c.in"]), stream("spk", &["loopback:c.in"])]);
+        assert!(plan.routes.is_empty());
+        assert_eq!(plan.issues.len(), 1, "{:?}", plan.issues);
+        assert_eq!(plan.issues[0].edges, vec!["c->a"]);
+        assert!(plan.issues[0].message.starts_with("Cable “c” has no output"));
+    }
+
+    #[test]
+    fn cable_without_output_into_itself_is_a_loop() {
+        let g = graph(vec![cable_node("c", Some("c")), output("o", dev("c.in"))], &[("c", "o")]);
+        let cables = [Cable { capture: None, ..cable("c", "c.in", "") }];
+        let plan = compile(&g, &cables, &defaults());
+        assert!(plan.issues[0].message.starts_with("Loop: the audio of cable “c”"), "{:?}", plan.issues);
+        assert!(plan.streams.is_empty());
     }
 
     #[test]

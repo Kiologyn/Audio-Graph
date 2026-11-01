@@ -124,6 +124,7 @@
   "issue_no_input_device": "No se ha seleccionado ningún dispositivo de entrada",
   "issue_no_default_input": "El sistema no tiene dispositivo de entrada predeterminado",
   "issue_cable_no_output": "El cable «{cable}» no tiene salida seleccionada",
+  "issue_cable_no_output_to_app": "El cable «{cable}» no tiene salida seleccionada, así que su audio solo puede ir a dispositivos, no a aplicaciones ni al micrófono predeterminado. Elige la salida del cable en la lista de cables",
   "issue_cable_deleted": "El cable se eliminó de la lista de cables",
   "issue_no_output_device": "No se ha seleccionado ningún dispositivo de salida",
   "issue_no_default_output": "El sistema no tiene dispositivo de salida predeterminado",
