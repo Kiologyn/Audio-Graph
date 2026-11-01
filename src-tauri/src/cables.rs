@@ -1,5 +1,5 @@
-//! Кабели: пары системных устройств, общие для всех графов.
-//! Хранятся одним файлом cables.json, ноды графов ссылаются на них по id.
+//! Cables: pairs of system devices shared by all graphs.
+//! Stored in one file, cables.json; graph nodes refer to them by id.
 
 use crate::engine::Engine;
 use crate::graphs::DeviceRef;
@@ -22,10 +22,10 @@ fn format_version() -> u32 {
 pub struct Cable {
     pub id: String,
     pub name: String,
-    /// Устройство вывода: в него играют приложения, это вход кабеля
+    /// The output device: apps play into it, it is the cable's input
     #[serde(default)]
     pub render: Option<DeviceRef>,
-    /// Устройство ввода: с него забирают звук, это выход кабеля
+    /// The input device: sound is taken from it, it is the cable's output
     #[serde(default)]
     pub capture: Option<DeviceRef>,
     pub created_at: u64,
@@ -44,10 +44,10 @@ pub struct CableStore {
     lock: Mutex<()>,
 }
 
-/// У кабеля только конкретные устройства: «по умолчанию» для него не имеет смысла
+/// A cable has specific devices only: "default" makes no sense for it
 fn check_device(device: &Option<DeviceRef>) -> CmdResult<()> {
     match device {
-        Some(DeviceRef::Default) => Err(tr!("у кабеля нельзя выбрать устройство по умолчанию")),
+        Some(DeviceRef::Default) => Err(tr!("error_cable_default_device")),
         _ => Ok(()),
     }
 }
@@ -60,7 +60,7 @@ impl CableStore {
         }
     }
 
-    /// Все кабели для движка
+    /// All cables for the engine
     pub fn all(&self) -> CmdResult<Vec<Cable>> {
         let _guard = self.lock.lock().map_err(err)?;
         self.read()
@@ -74,7 +74,7 @@ impl CableStore {
         }
     }
 
-    /// Записывает список и сообщает движку: от кабелей зависит запущенный граф
+    /// Writes the list and tells the engine: a running graph depends on cables
     fn write(&self, cables: Vec<Cable>, engine: &Engine) -> CmdResult<()> {
         let file = CablesFile {
             version: FORMAT_VERSION,
@@ -109,7 +109,7 @@ pub fn cable_create(store: State<CableStore>, engine: State<Engine>, name: Strin
     Ok(cable)
 }
 
-/// Заменяет имя и устройства кабеля; id и дата создания не меняются
+/// Replaces a cable's name and devices; the id and creation date stay
 #[tauri::command]
 pub fn cable_update(store: State<CableStore>, engine: State<Engine>, cable: Cable) -> CmdResult<Cable> {
     let _guard = store.lock.lock().map_err(err)?;
@@ -120,7 +120,7 @@ pub fn cable_update(store: State<CableStore>, engine: State<Engine>, cable: Cabl
     let target = cables
         .iter_mut()
         .find(|c| c.id == cable.id)
-        .ok_or_else(|| tr!("кабель не найден"))?;
+        .ok_or_else(|| tr!("error_cable_not_found"))?;
     target.name = clean_name(&cable.name)?;
     target.render = cable.render;
     target.capture = cable.capture;

@@ -1,11 +1,15 @@
-//! Аудиодвижок: выполняет запущенные графы и держит их в рабочем состоянии, пока меняются
-//! устройства, запускаются и закрываются приложения, правится граф или список кабелей.
+//! The audio engine: runs the started graphs and keeps them working while devices change,
+//! apps start and close, and the graph or the cable list is edited.
 //!
-//! Всё делает один поток-надсмотрщик: получает изменения, раз в TICK сверяется с системой,
-//! пересобирает план (plan.rs) и приводит к нему потоки звука и устройства приложений.
+//! One supervisor thread does it all: it receives changes, checks the system every TICK,
+//! rebuilds the plan (plan.rs) and brings audio streams and app devices in line with it.
 
+#[cfg(windows)]
 mod link;
-mod plan;
+#[cfg(target_os = "linux")]
+mod linux;
+pub(crate) mod plan;
+#[cfg(windows)]
 mod ring;
 #[cfg(windows)]
 mod win;
@@ -23,9 +27,14 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-/// Как часто движок сверяется с системой: устройства по умолчанию, упавшие потоки,
-/// запущенные приложения
-const TICK: Duration = Duration::from_millis(1500);
+/// How often the engine checks the system: default devices, failed streams,
+/// running apps. More often on Linux: new app streams are moved by this poll,
+/// and polling the audio server is cheap
+const TICK: Duration = Duration::from_millis(if cfg!(target_os = "linux") { 500 } else { 1500 });
+
+/// Cables are virtual devices the graph creates itself (Linux), not device pairs
+/// from the shared list (on Windows a driver installs the virtual devices)
+pub const DYNAMIC_CABLES: bool = cfg!(target_os = "linux");
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -34,7 +43,7 @@ pub struct DeviceError {
     pub message: String,
 }
 
-/// Поток движка: что в какое устройство играется и что с ним не так
+/// An engine stream: what plays into which device and what is wrong with it
 #[derive(Serialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct StreamStatus {
@@ -46,11 +55,11 @@ pub struct StreamStatus {
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AppState {
-    /// Устройства назначены
+    /// Devices are assigned
     Routed,
-    /// Приложение не запущено: устройства назначатся, когда запустится
+    /// The app isn't running: devices are assigned when it starts
     NotRunning,
-    /// Приложение запущено, но ещё не открывало звук: устройства назначатся, когда откроет
+    /// The app runs but hasn't opened audio yet: devices are assigned when it does
     NoAudio,
     Failed,
 }
@@ -66,23 +75,23 @@ pub struct AppStatus {
 #[derive(Serialize, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct EngineStatus {
-    /// Запущенные графы в порядке запуска
+    /// Running graphs in start order
     pub running: Vec<String>,
-    /// Граф, к которому относятся issues: открытый в окне, а без него — первый запущенный
+    /// The graph the issues belong to: the one open in the window, or else the first running one
     pub graph_id: Option<String>,
     pub issues: Vec<Issue>,
-    /// Устройства всех запущенных графов
+    /// Devices of all running graphs
     pub streams: Vec<StreamStatus>,
-    /// Приложения всех запущенных графов (id нод уникальны между графами)
+    /// Apps of all running graphs (node ids are unique across graphs)
     pub apps: Vec<AppStatus>,
-    /// Запущенные графы, у которых что-то не работает
+    /// Running graphs where something doesn't work
     pub troubled: Vec<String>,
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 struct Backend;
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 impl Backend {
     fn new(_: &Path) -> Self {
         Backend
@@ -99,23 +108,26 @@ impl Backend {
 #[cfg(windows)]
 use win::Backend;
 
+#[cfg(target_os = "linux")]
+use linux::Backend;
+
 enum Msg {
-    /// Граф открыт в окне: проблемы показываются для него, пока ничего не запущено
+    /// A graph is open in the window: problems are shown for it while nothing runs
     Opened(Graph),
     Saved(Graph),
     Deleted(String),
     Cables(Vec<Cable>),
-    /// Запустить граф; уже запущенный — обновить
+    /// Start a graph; refresh one that already runs
     Start(Graph),
-    /// Остановить граф, None — все
+    /// Stop a graph, None stops all
     Stop(Option<String>),
-    /// Из трея: запустить или остановить открытый граф
+    /// From the tray: start or stop the open graph
     Toggle,
-    /// Ползунок громкости двигают: применить сразу, не дожидаясь автосохранения
+    /// A volume slider is moving: apply at once without waiting for autosave
     Volume { graph: String, node: String, volume: f32 },
-    /// Настройки изменились: язык сообщений и трея, выключение кабелей
+    /// Settings changed: message and tray language, turning cables off
     Settings { disable_idle_cables: bool },
-    /// Закрытие приложения: остановить всё, вернуть устройства приложениям и ответить
+    /// App exit: stop everything, give apps back their devices and reply
     Shutdown(mpsc::Sender<()>),
 }
 
@@ -133,7 +145,7 @@ impl Engine {
         std::thread::Builder::new()
             .name("audio engine".into())
             .spawn(move || supervise(rx, app, &data_dir, cables, disable_idle_cables, &shared))
-            .expect("не удалось запустить поток движка");
+            .expect("failed to start the engine thread");
         Self { tx, status }
     }
 
@@ -171,7 +183,7 @@ impl Engine {
         });
     }
 
-    /// Останавливает граф и возвращает устройства приложениям; ждёт, но не дольше пары секунд
+    /// Stops a graph and gives apps back their devices; waits, but no longer than a couple of seconds
     pub fn shutdown(&self) {
         let (tx, rx) = mpsc::channel();
         self.send(Msg::Shutdown(tx));
@@ -179,7 +191,7 @@ impl Engine {
     }
 }
 
-/// Устройства кабелей из списка, которые используют графы
+/// Devices of listed cables that the graphs use
 fn cable_devices(graphs: &[Graph], cables: &[Cable]) -> BTreeSet<String> {
     let used: HashSet<&str> = graphs
         .iter()
@@ -198,15 +210,15 @@ fn cable_devices(graphs: &[Graph], cables: &[Cable]) -> BTreeSet<String> {
         .collect()
 }
 
-/// Включает или выключает устройства кабелей; ошибки — в журнал
+/// Turns cable devices on or off; errors go to the log
 fn power_cables(ids: &BTreeSet<String>, enabled: bool) {
     if ids.is_empty() {
         return;
     }
     let ids: Vec<String> = ids.iter().cloned().collect();
     if let Err(e) = crate::devices::set_enabled(&ids, enabled) {
-        let what = if enabled { "включить" } else { "выключить" };
-        crate::log::write(format!("не удалось {what} кабели: {e}"));
+        let what = if enabled { "turn on" } else { "turn off" };
+        crate::log::write(format!("failed to {what} cables: {e}"));
     }
 }
 
@@ -222,16 +234,16 @@ fn supervise(
     let _com = crate::com::ComGuard::init();
     let mut backend = Backend::new(data_dir);
     let mut opened: Option<Graph> = None;
-    // в порядке запуска: при спорах за приложение или устройства по умолчанию прав граф, запущенный раньше
+    // in start order: when graphs contend for an app or the default devices, the one started first wins
     let mut running: Vec<Graph> = Vec::new();
     let mut reply = None;
-    // что сейчас показывает трей: имена запущенных графов, открытый граф и запущен ли он, язык
+    // what the tray shows now: names of running graphs, the open graph and whether it runs, the language
     let mut tray_shows: Option<(Vec<String>, Option<String>, bool, crate::settings::Language)> = None;
-    // устройства кабелей запущенных графов: когда графы перестают их использовать, их можно выключить
+    // cable devices of running graphs: once no graph uses them, they can be turned off
     let mut powered: BTreeSet<String> = BTreeSet::new();
-    // устройства включались или выключались: окну нужно перечитать их список
+    // devices were turned on or off: the window needs to reread their list
     let mut force_emit = false;
-    // что уже записано в журнал: каждая ошибка пишется, когда появляется
+    // what is already in the log: every error is written when it appears
     let mut logged_running: Vec<String> = Vec::new();
     let mut logged_errors: HashSet<String> = HashSet::new();
     let same = |g: &Option<Graph>, id: &str| g.as_ref().is_some_and(|g| g.id == id);
@@ -243,7 +255,7 @@ fn supervise(
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return,
         }
-        // пачка изменений (автосохранение во время перетаскивания) применяется за раз
+        // a burst of changes (autosave while dragging) is applied at once
         messages.extend(rx.try_iter());
         for msg in messages {
             match msg {
@@ -287,7 +299,7 @@ fn supervise(
                 }
                 Msg::Settings { disable_idle_cables: disable } => {
                     disable_idle_cables = disable;
-                    // язык мог смениться: трей перерисуется ниже, сообщения пересоберутся в плане
+                    // the language may have changed: the tray is redrawn below, messages are rebuilt in the plan
                     tray_shows = None;
                 }
                 Msg::Shutdown(tx) => {
@@ -297,7 +309,7 @@ fn supervise(
             }
         }
 
-        // кабели графа включаются до того, как движок откроет их устройства
+        // a graph's cables are turned on before the engine opens their devices
         let used = cable_devices(&running, &cables);
         if disable_idle_cables {
             let added: BTreeSet<String> = used.difference(&powered).cloned().collect();
@@ -308,12 +320,24 @@ fn supervise(
         }
 
         let defaults = backend.defaults();
-        // открытый, но не запущенный граф проверяется последним: видно, с чем он столкнётся при запуске
+        // the open but stopped graph is checked last: it shows what it will run into when started
         let opened_running = opened.as_ref().is_some_and(|o| running.iter().any(|r| r.id == o.id));
         let mut checked: Vec<&Graph> = running.iter().collect();
         checked.extend(opened.as_ref().filter(|_| !opened_running));
-        let plans = plan::compile_all(&checked, &cables, &defaults);
-        // пока ничего не запущено, план пустой: потоки закрываются, приложениям возвращаются их устройства
+        let plans = if DYNAMIC_CABLES {
+            // every cable node has its own virtual device: the plan is the same as with listed cables
+            let virtualized: Vec<_> = checked.iter().map(|g| plan::virtualize(g)).collect();
+            let graphs: Vec<&Graph> = virtualized.iter().map(|v| &v.0).collect();
+            let cables: Vec<Cable> = virtualized.iter().flat_map(|v| v.1.iter().cloned()).collect();
+            let mut plans = plan::compile_all(&graphs, &cables, &defaults);
+            for (plan, v) in plans.iter_mut().zip(virtualized) {
+                plan.virtual_cables = v.2;
+            }
+            plans
+        } else {
+            plan::compile_all(&checked, &cables, &defaults)
+        };
+        // while nothing runs the plan is empty: streams close, apps get their devices back
         let (streams, apps) = backend.apply(&plan::merge(&plans[..running.len()]));
         let shown = opened.as_ref().or(running.first());
         let issues = shown
@@ -337,7 +361,7 @@ fn supervise(
             apps,
             troubled,
         };
-        // а выключаются после: потоки закрыты, устройства по умолчанию возвращены
+        // and turned off afterwards: streams are closed, default devices are restored
         if disable_idle_cables {
             let removed: BTreeSet<String> = powered.difference(&used).cloned().collect();
             if !removed.is_empty() {
@@ -364,7 +388,7 @@ fn supervise(
             crate::i18n::language(),
         );
         if tray_shows.as_ref() != Some(&names) {
-            // трей создаётся после движка: до этого обновлять нечего
+            // the tray is created after the engine: nothing to update before that
             if let Some(tray) = app.try_state::<crate::tray::Tray>() {
                 tray.update(&app, &names.0, names.1.as_deref(), names.2);
                 tray_shows = Some(names);
@@ -379,13 +403,13 @@ fn supervise(
     }
 }
 
-/// Пишет в журнал запуск и остановку графов и новые ошибки движка
+/// Logs graph starts and stops and new engine errors
 fn log_changes(running: &[Graph], status: &EngineStatus, last_running: &mut Vec<String>, last_errors: &mut HashSet<String>) {
     for g in running.iter().filter(|g| !last_running.contains(&g.id)) {
-        crate::log::write(format!("граф запущен: «{}»", g.name));
+        crate::log::write(format!("graph started: \"{}\"", g.name));
     }
     for id in last_running.iter().filter(|id| !status.running.contains(id)) {
-        crate::log::write(format!("граф остановлен: {id}"));
+        crate::log::write(format!("graph stopped: {id}"));
     }
     *last_running = status.running.clone();
     let label = |id: &str| {
@@ -402,10 +426,10 @@ fn log_changes(running: &[Graph], status: &EngineStatus, last_running: &mut Vec<
         }
     }
     for e in status.streams.iter().flat_map(|s| &s.errors) {
-        errors.insert(format!("устройство {}: {}", e.device, e.message));
+        errors.insert(format!("device {}: {}", e.device, e.message));
     }
     for e in errors.difference(last_errors) {
-        crate::log::write(format!("ошибка: {e}"));
+        crate::log::write(format!("error: {e}"));
     }
     *last_errors = errors;
 }
@@ -421,7 +445,7 @@ pub fn engine_start(engine: State<Engine>, graphs: State<GraphStore>, id: String
     Ok(())
 }
 
-/// id — какой граф остановить; без него — все
+/// id: the graph to stop; without it, all
 #[tauri::command]
 pub fn engine_stop(engine: State<Engine>, id: Option<String>) {
     engine.send(Msg::Stop(id));

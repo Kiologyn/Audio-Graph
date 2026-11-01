@@ -1,4 +1,4 @@
-/* тема задаётся атрибутом data-theme (settings.ts): светлая, тёмная или как в Windows */
+/* the theme is set by the data-theme attribute (settings.ts): light, dark or as in the system */
 :root {
   color-scheme: light;
   font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Noto Sans", sans-serif;
@@ -12,10 +12,10 @@
   --ag-text-dim: #6b7280;
   --ag-edge: #8a92a3;
   --ag-focus: #3b6ef5;
-  /* подложка кнопки под курсором: полупрозрачная, ложится на любой фон строки */
+  /* hover background of a button: translucent, fits any row background */
   --ag-hover: rgb(0 0 0 / 0.07);
 
-  /* цвета видов нод */
+  /* node kind colors */
   --ag-input: #18a06a;
   --ag-output: #2f6fe4;
   --ag-app: #8a4fe0;
@@ -59,7 +59,7 @@ body,
 body {
   background: var(--ag-bg);
   color: var(--ag-text);
-  /* приложение, а не страница: без выделения текста мышью */
+  /* an app, not a page: no text selection with the mouse */
   user-select: none;
   overflow: hidden;
 }
@@ -69,7 +69,7 @@ button {
   color: inherit;
 }
 
-/* ---------- каркас ---------- */
+/* ---------- layout ---------- */
 
 .ag-app {
   display: grid;
@@ -94,7 +94,7 @@ button {
   color: var(--ag-danger);
 }
 
-/* ---------- меню в шапке: графы и кабели ---------- */
+/* ---------- header menus: graphs and cables ---------- */
 
 .ag-graphs,
 .ag-cables,
@@ -140,7 +140,7 @@ button {
   color: var(--ag-cable);
 }
 
-/* ---------- запуск графа, справа в шапке ---------- */
+/* ---------- graph start, on the right of the header ---------- */
 
 .ag-run {
   display: flex;
@@ -150,9 +150,9 @@ button {
   min-width: 0;
 }
 
-/* ---------- громкость нод и настройки ---------- */
+/* ---------- node volume and settings ---------- */
 
-/* галочка громкости в строке графа */
+/* volume checkbox in a graph row */
 .ag-graphs__volume {
   display: inline-flex;
   flex: none;
@@ -239,12 +239,27 @@ button {
   margin-top: 2px;
 }
 
-.ag-settings__check small {
+.ag-settings__check small,
+.ag-settings__quit small {
   display: block;
   margin-top: 3px;
   font-size: 11.5px;
   line-height: 1.4;
   color: var(--ag-text-dim);
+}
+
+.ag-settings__quit {
+  padding: 8px 10px;
+  border: 1px solid var(--ag-border);
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ag-settings__quit:hover {
+  border-color: var(--ag-danger);
+  color: var(--ag-danger);
 }
 
 .ag-run__state {
@@ -284,7 +299,7 @@ button {
   color: var(--ag-danger);
 }
 
-/* только значок: что делает кнопка, видно по нему и по подсказке */
+/* icon only: the icon and the tooltip tell what the button does */
 .ag-run__btn {
   display: inline-flex;
   align-items: center;
@@ -318,7 +333,7 @@ button {
   cursor: default;
 }
 
-/* список проблем */
+/* problem list */
 .ag-problem {
   max-width: 360px;
   padding: 6px 8px 6px 12px;
@@ -396,7 +411,7 @@ button {
   cursor: pointer;
 }
 
-/* открытый граф: подложка и полоса слева */
+/* the open graph: background and a bar on the left */
 .ag-panel__row.is-current {
   background: color-mix(in srgb, var(--ag-focus) 14%, transparent);
   box-shadow: inset 3px 0 0 var(--ag-focus);
@@ -421,7 +436,7 @@ button {
   background: transparent;
   color: var(--ag-text-dim);
   cursor: pointer;
-  /* действия видны только при наведении на строку */
+  /* actions show only on row hover */
   opacity: 0;
 }
 
@@ -443,7 +458,7 @@ button {
   color: var(--ag-input);
 }
 
-/* запущенность графа в списке: точка перед названием */
+/* running state of a graph in the list: a dot before the name */
 .ag-graphs__state {
   flex: none;
   width: 7px;
@@ -466,24 +481,24 @@ button {
   padding-left: 9px;
 }
 
-/* кнопки не прилипают к правому краю подсветки строки */
+/* buttons don't stick to the right edge of the row highlight */
 .ag-graphs .ag-panel__row {
   padding-right: 4px;
 }
 
-/* в строке графа ещё галочка громкости и запуск: панель шире, чтобы названия влезали */
+/* a graph row also has the volume checkbox and start: the panel is wider so names fit */
 .ag-graphs .ag-panel {
   width: 360px;
 }
 
-/* сколько графов запущено — на кнопке списка графов */
+/* how many graphs run: on the graph list button */
 .ag-count.is-running {
   color: var(--ag-input);
   border-color: color-mix(in srgb, var(--ag-input) 45%, transparent);
   background: color-mix(in srgb, var(--ag-input) 12%, transparent);
 }
 
-/* кнопка сохранения имени видна всегда, пока идёт редактирование */
+/* the save-name button is always visible while editing */
 .ag-panel__action.is-confirm {
   opacity: 1;
   margin-right: 2px;
@@ -497,7 +512,7 @@ button {
 .ag-panel__input {
   flex: 1;
   margin: 2px;
-  /* текст начинается там же, где название в обычной строке */
+  /* the text starts where the name does in a normal row */
   padding: 5px 7px 5px 9px;
   font: inherit;
   color: var(--ag-text);
@@ -560,7 +575,7 @@ button {
   background: var(--ag-surface-2);
 }
 
-/* ---------- панель кабелей ---------- */
+/* ---------- cable panel ---------- */
 
 .ag-cables__panel {
   width: 340px;
@@ -611,7 +626,7 @@ button {
   color: var(--ag-danger);
 }
 
-/* раскрытый для настройки кабель */
+/* a cable expanded for setup */
 .ag-cables__editor {
   --accent: var(--ag-cable);
   display: grid;
@@ -649,7 +664,7 @@ button {
   background: var(--ag-surface);
 }
 
-/* «Все кабели: Включить / Выключить» над списком */
+/* "All cables: On / Off" above the list */
 .ag-cables__bulk {
   display: flex;
   align-items: center;
@@ -669,7 +684,7 @@ button {
   cursor: default;
 }
 
-/* ---------- переключатель кабеля ---------- */
+/* ---------- cable switch ---------- */
 
 .ag-switch {
   position: relative;
@@ -711,7 +726,7 @@ button {
   background: var(--ag-cable);
 }
 
-/* включён частично: ручка посередине */
+/* partly on: the knob in the middle */
 .ag-switch.is-mixed {
   border-style: dashed;
   border-color: var(--ag-cable);
@@ -744,7 +759,7 @@ button {
   text-overflow: ellipsis;
 }
 
-/* ---------- холст ---------- */
+/* ---------- canvas ---------- */
 
 .ag-canvas {
   position: relative;
@@ -766,7 +781,7 @@ button {
   --xy-controls-button-border-color: var(--ag-border);
 }
 
-/* связь, о которой движок сообщил проблему */
+/* an edge the engine reported a problem with */
 .ag-canvas .react-flow__edge.is-issue .react-flow__edge-path {
   stroke: var(--ag-danger);
   stroke-dasharray: 6 4;
@@ -778,7 +793,7 @@ button {
   overflow: hidden;
 }
 
-/* ---------- нода ---------- */
+/* ---------- node ---------- */
 
 .ag-node {
   --accent: var(--ag-cable);
@@ -843,7 +858,20 @@ button {
   user-select: text;
 }
 
-/* громкость ноды: ползунок в цвет вида ноды и процент */
+/* a cable on Linux: the name of the virtual device the graph creates */
+.ag-node__virtual {
+  margin-top: 8px;
+  padding: 5px 8px;
+  border: 1px dashed var(--ag-border);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--ag-text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* node volume: a slider in the node kind's color and a percentage */
 .ag-volume {
   display: flex;
   align-items: center;
@@ -881,12 +909,12 @@ button {
   user-select: none;
 }
 
-/* усиление сверх 100% делает только движок, его видно */
+/* gain above 100% is done by the engine only, and it shows */
 .ag-volume__value.is-boost {
   color: var(--accent);
 }
 
-/* текущие устройства по умолчанию на ноде «Система» */
+/* current default devices on the "System" node */
 .ag-node__defaults {
   display: grid;
   grid-template-columns: auto 1fr;
@@ -906,7 +934,7 @@ button {
   white-space: nowrap;
 }
 
-/* пометки движка: что не работает или ждёт */
+/* engine notes: what doesn't work or waits */
 .ag-node__notes {
   display: grid;
   gap: 4px;
@@ -923,7 +951,7 @@ button {
   color: var(--ag-danger);
 }
 
-/* ---------- выбор устройства на ноде ---------- */
+/* ---------- device choice on a node ---------- */
 
 .ag-node__devices {
   display: grid;
@@ -969,14 +997,14 @@ button {
   font-style: italic;
 }
 
-/* выбранное устройство или кабель выключены в системе */
+/* the chosen device or cable is turned off in the system */
 .ag-device.is-off .ag-device__name {
   color: var(--ag-text-dim);
   text-decoration: line-through;
   text-decoration-color: color-mix(in srgb, var(--ag-text-dim) 60%, transparent);
 }
 
-/* выбранное устройство сейчас не подключено */
+/* the chosen device isn't connected now */
 .ag-device.is-missing {
   border-style: dashed;
   border-color: var(--ag-danger);
@@ -986,7 +1014,7 @@ button {
   color: var(--ag-danger);
 }
 
-/* ---------- выпадающий список устройств ---------- */
+/* ---------- device dropdown ---------- */
 
 .ag-popover {
   position: fixed;
@@ -1001,7 +1029,7 @@ button {
   overflow: hidden;
 }
 
-/* обновление списка: значок в углу поверх списка, место под него не нужно */
+/* list refresh: an icon in the corner over the list, it needs no room of its own */
 .ag-popover__spinner {
   position: absolute;
   top: 8px;
@@ -1028,7 +1056,7 @@ button {
   cursor: pointer;
 }
 
-/* «По умолчанию»: еле заметная рамка, чтобы не путать с выбранным пунктом */
+/* "Default": a faint border so it isn't mistaken for the chosen item */
 .ag-popover__item.is-default {
   margin-bottom: 2px;
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ag-border) 70%, transparent);
@@ -1038,7 +1066,7 @@ button {
   background: var(--ag-surface-2);
 }
 
-/* как открытый граф в списке графов: подложка и полоса слева */
+/* like the open graph in the graph list: background and a bar on the left */
 .ag-popover__item.is-selected {
   background: color-mix(in srgb, var(--ag-focus) 14%, transparent);
   box-shadow: inset 3px 0 0 var(--ag-focus);
@@ -1054,7 +1082,7 @@ button {
   color: var(--ag-danger);
 }
 
-/* выключенное устройство или кабель: выбрать можно, но выглядит приглушённо */
+/* a turned-off device or cable: can be chosen but looks dimmed */
 .ag-popover__item.is-off .ag-popover__name {
   color: var(--ag-text-dim);
 }
@@ -1076,7 +1104,7 @@ button {
   color: var(--ag-text-dim);
 }
 
-/* подзаголовок группы внутри списка: над следующими группами — разделитель во всю ширину */
+/* a group subheading in the list: a full-width divider above the following groups */
 .ag-popover__section {
   margin: 6px -4px 0;
   padding: 8px 16px 4px;
@@ -1106,7 +1134,7 @@ button {
   border-top: 1px solid var(--ag-border);
 }
 
-/* обновление обычно занимает миллисекунды: показываем индикатор, только если оно затянулось */
+/* a refresh usually takes milliseconds: show the indicator only if it drags on */
 .ag-spinner {
   width: 10px;
   height: 10px;
@@ -1143,7 +1171,7 @@ button {
   background: var(--accent);
 }
 
-/* ---------- контекстное меню ---------- */
+/* ---------- context menu ---------- */
 
 .ag-menu {
   position: absolute;

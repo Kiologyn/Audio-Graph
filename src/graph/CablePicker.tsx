@@ -4,7 +4,7 @@ import { cablePower, useCablePanel, useCables, type Cable } from "./cables";
 import { describeDevice, useDevices } from "./devices";
 import { PickerChip, Popover, PopoverItem } from "./Popover";
 
-/** Выбор кабеля из общего списка для ноды кабеля. null — внутренний кабель без системных устройств. */
+/** Cable choice from the shared list for a cable node. null is an internal cable without system devices. */
 export function CablePicker({ value, onChange }: { value: string | null; onChange: (id: string | null) => void }) {
   const anchor = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
@@ -15,16 +15,16 @@ export function CablePicker({ value, onChange }: { value: string | null; onChang
   const loading = useDevices((s) => s.loading);
   const t = useT();
 
-  // «вход → выход» с отметками: какое-то устройство недоступно, кабель выключен в системе
+  // "input → output" with marks: a device is unavailable, the cable is off in the system
   const route = (c: Cable) => {
     const r = describeDevice(c.render, "render", devices, devicesLoaded);
     const cap = describeDevice(c.capture, "capture", devices, devicesLoaded);
     const power = cablePower(c, devices);
-    const state = power === "off" ? t(" · выключен") : power === "mixed" ? t(" · выключен частично") : "";
-    const side = (d: typeof r) => `${d.text ?? t("не выбрано")}${d.missing ? t(" (недоступно)") : d.disabled ? t(" (отключено)") : ""}`;
+    const state = power === "off" ? t("cable_off_suffix") : power === "mixed" ? t("cable_partly_off_suffix") : "";
+    const side = (d: typeof r) => `${d.text ?? t("not_selected")}${d.missing ? t("cable_unavailable_suffix") : d.disabled ? t("cable_disabled_suffix") : ""}`;
     return {
-      text: `${r.text ?? t("не выбрано")} → ${cap.text ?? t("не выбрано")}${state}`,
-      title: `${t("Вход: {device}", { device: side(r) })}\n${t("Выход: {device}", { device: side(cap) })}`,
+      text: `${r.text ?? t("not_selected")} → ${cap.text ?? t("not_selected")}${state}`,
+      title: `${t("cable_in_device", { device: side(r) })}\n${t("cable_out_device", { device: side(cap) })}`,
       missing: r.missing || cap.missing,
       off: power === "off" || power === "mixed",
     };
@@ -34,11 +34,11 @@ export function CablePicker({ value, onChange }: { value: string | null; onChang
   const deleted = !!value && loaded && !cable;
   const info = cable ? route(cable) : null;
 
-  let text = t("Внутренний");
-  let title = t("Внутренний: без системных устройств");
+  let text = t("cable_internal");
+  let title = t("cable_internal_hint");
   if (deleted) {
-    text = t("Кабель удалён");
-    title = t("Кабель удалён из списка кабелей, выберите другой");
+    text = t("cable_deleted");
+    title = t("cable_deleted_hint");
   } else if (value) {
     text = cable?.name ?? "…";
     title = info?.title ?? "";
@@ -73,7 +73,7 @@ export function CablePicker({ value, onChange }: { value: string | null; onChang
           footer={
             <>
               <PopoverItem
-                name={t("Новый кабель…")}
+                name={t("new_cable_menu")}
                 className="is-dim"
                 onClick={async () => {
                   setOpen(false);
@@ -84,7 +84,7 @@ export function CablePicker({ value, onChange }: { value: string | null; onChang
                 }}
               />
               <PopoverItem
-                name={t("Настроить кабели…")}
+                name={t("setup_cables_menu")}
                 className="is-dim"
                 onClick={() => {
                   setOpen(false);
@@ -94,8 +94,8 @@ export function CablePicker({ value, onChange }: { value: string | null; onChang
             </>
           }
         >
-          {deleted && <PopoverItem selected className="is-missing" name={t("Кабель удалён")} hint={t("выберите другой")} onClick={() => setOpen(false)} />}
-          <PopoverItem selected={!value} name={t("Внутренний")} hint={t("без системных устройств")} onClick={() => select(null)} />
+          {deleted && <PopoverItem selected className="is-missing" name={t("cable_deleted")} hint={t("cable_deleted_detail")} onClick={() => setOpen(false)} />}
+          <PopoverItem selected={!value} name={t("cable_internal")} hint={t("cable_internal_detail")} onClick={() => select(null)} />
           {cables.map((c) => {
             const r = route(c);
             return (
@@ -109,7 +109,7 @@ export function CablePicker({ value, onChange }: { value: string | null; onChang
               />
             );
           })}
-          {loaded && cables.length === 0 && <div className="ag-popover__empty">{t("Кабелей пока нет")}</div>}
+          {loaded && cables.length === 0 && <div className="ag-popover__empty">{t("cables_none_yet")}</div>}
         </Popover>
       )}
     </>

@@ -1,10 +1,10 @@
-//! Устройства приложений — та же настройка, что «Параметры → Звук → Громкость приложений».
-//! Windows хранит её на приложение (исполняемый файл) и применяет к запущенным процессам сразу.
-//! Здесь же устройства по умолчанию, которые назначает нода «Система».
+//! App devices: the same setting as "Settings → Sound → Volume mixer" per app.
+//! Windows stores it per app (executable file) and applies it to running processes at once.
+//! The default devices the "System" node sets are here too.
 //!
-//! Прежние значения записываются в журнал на диске до изменения: после остановки графа
-//! они возвращаются. Если приложение в этот момент закрыто, возврат ждёт его запуска —
-//! в том числе после перезапуска Audio Graph или его падения.
+//! Previous values are written to a journal on disk before a change: after the graph stops
+//! they are restored. If the app is closed at that moment, restoring waits for it to start,
+//! including after Audio Graph restarts or crashes.
 
 use super::super::plan::{AppRoute, SystemRoute, Target};
 use super::super::{AppState, AppStatus};
@@ -24,10 +24,10 @@ use windows::Win32::System::Diagnostics::ToolHelp::{
 };
 use windows::Win32::System::WinRT::RoGetActivationFactory;
 
-/// Недокументированная фабрика, через которую настройки Windows назначают устройства
-/// приложениям (ей же пользуется EarTrumpet). Порядок методов — таблица виртуальных функций,
-/// менять его нельзя. У Windows 11 и у Windows 10 этот интерфейс с разными IID, но с одинаковой
-/// таблицей: объявлен вариант Windows 11, вариант Windows 10 запрашивается по своему IID.
+/// The undocumented factory Windows settings use to assign devices
+/// to apps (EarTrumpet uses it too). The method order is the virtual function table
+/// and must not change. Windows 11 and Windows 10 have this interface under different IIDs but with the same
+/// table: the Windows 11 variant is declared, the Windows 10 one is queried by its own IID.
 mod factory {
     #![allow(non_snake_case, dead_code)]
 
@@ -41,7 +41,7 @@ mod factory {
         fn GetIids(&self) -> HRESULT;
         fn GetRuntimeClassName(&self) -> HRESULT;
         fn GetTrustLevel(&self) -> HRESULT;
-        // методы, которые не нужны: только место в таблице
+        // methods that aren't needed: only their slots in the table
         fn add_CtxVolumeChange(&self) -> HRESULT;
         fn remove_CtxVolumeChanged(&self) -> HRESULT;
         fn add_RingerVibrateStateChanged(&self) -> HRESULT;
@@ -61,7 +61,7 @@ mod factory {
         fn GetCurrentChatApplications(&self) -> HRESULT;
         fn add_ChatContextChanged(&self) -> HRESULT;
         fn remove_ChatContextChanged(&self) -> HRESULT;
-        /// device — HSTRING с путём устройства; пустой снимает настройку
+        /// device is an HSTRING with the device path; an empty one clears the setting
         pub fn SetPersistedDefaultAudioEndpoint(&self, pid: u32, flow: EDataFlow, role: ERole, device: *mut c_void) -> HRESULT;
         pub fn GetPersistedDefaultAudioEndpoint(&self, pid: u32, flow: EDataFlow, role: ERole, device: *mut *mut c_void) -> HRESULT;
         fn ClearAllPersistedApplicationDefaultEndpoints(&self) -> HRESULT;
@@ -70,10 +70,10 @@ mod factory {
 
 use factory::IAudioPolicyConfigFactory;
 
-/// IID того же интерфейса в Windows 10
+/// IID of the same interface in Windows 10
 const DOWNLEVEL_IID: GUID = GUID::from_u128(0x2a59116d_6c4f_45e0_a74f_707e3fef9258);
 
-/// Путь устройства в этой настройке: id из MMDevice с префиксом и классом интерфейса
+/// The device path in this setting: the MMDevice id with a prefix and the interface class
 const PREFIX: &str = r"\\?\SWD#MMDEVAPI#";
 const RENDER_SUFFIX: &str = "#{e6327cad-dcec-4949-ae8a-991e976a79d2}";
 const CAPTURE_SUFFIX: &str = "#{2eef81be-33fa-4800-9670-1cd474972c3f}";
@@ -94,17 +94,17 @@ impl Flow {
     }
 }
 
-/// Значение до того, как его поменял граф
+/// The value before the graph changed it
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct Saved {
-    /// Имя исполняемого файла в нижнем регистре
+    /// Executable file name in lower case
     exe: String,
     flow: Flow,
-    /// None — у приложения не было своей настройки, оно шло за системным устройством
+    /// None: the app had no setting of its own and followed the system device
     previous: Option<String>,
 }
 
-/// Роли устройства по умолчанию: обычное, мультимедиа и связь (звонки). «Система» меняет все три
+/// Default device roles: console, multimedia and communications (calls). "System" changes all three
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum Role {
@@ -125,7 +125,7 @@ impl Role {
     }
 }
 
-/// Устройство по умолчанию до того, как его поменял граф
+/// The default device before the graph changed it
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct SavedDefault {
     flow: Flow,
@@ -133,7 +133,7 @@ struct SavedDefault {
     previous: Option<String>,
 }
 
-/// Громкость приложения в микшере до того, как её поменял граф
+/// The app's mixer volume before the graph changed it
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct SavedVolume {
     exe: String,
@@ -155,18 +155,18 @@ pub struct Router {
     saved: Vec<Saved>,
     defaults: Vec<SavedDefault>,
     volumes: Vec<SavedVolume>,
-    /// Что движок сам назначил процессам — на случай, если Windows не даёт прочитать
+    /// What the engine itself assigned to processes, in case Windows doesn't allow reading it
     applied: HashMap<(u32, Flow), Option<String>>,
-    /// Процессы, для которых чтение уже не удалось (в журнал — один раз)
+    /// Processes for which reading already failed (logged once)
     read_failed: HashSet<(u32, Flow)>,
 }
 
-/// Ошибка с тем, что именно не удалось, и кодом: по журналу видно, где Windows отказала
+/// An error with what exactly failed and the code: the log shows where Windows refused
 fn describe(step: &str, flow: Flow, pid: u32, e: &windows::core::Error) -> String {
-    let flow = if flow == Flow::Render { tr!("вывод") } else { tr!("ввод") };
+    let flow = if flow == Flow::Render { tr!("flow_output") } else { tr!("flow_input") };
     let code = format!("0x{:08X}", e.code().0 as u32);
     tr!(
-        "{step} ({flow}, процесс {pid}): {message} [{code}]",
+        "error_app_device_step",
         step = step,
         flow = flow,
         pid = pid,
@@ -175,7 +175,7 @@ fn describe(step: &str, flow: Flow, pid: u32, e: &windows::core::Error) -> Strin
     )
 }
 
-/// Запущенные процессы: имя файла в нижнем регистре → pid
+/// Running processes: file name in lower case → pid
 fn processes() -> HashMap<String, Vec<u32>> {
     let mut map: HashMap<String, Vec<u32>> = HashMap::new();
     unsafe {
@@ -199,16 +199,16 @@ fn processes() -> HashMap<String, Vec<u32>> {
 }
 
 enum Found {
-    /// Процесс со звуковым сеансом: только его Windows принимает в этой настройке,
-    /// для остальных процессов приложения (у браузеров и Discord их десятки) — «неверный параметр»
+    /// A process with an audio session: Windows accepts only such a process in this setting,
+    /// for the app's other processes (browsers and Discord have dozens) it says "invalid parameter"
     Audio(u32),
-    /// Приложение запущено, но ещё ни разу не открывало звук
+    /// The app runs but has never opened audio yet
     Silent,
     Absent,
 }
 
-/// Процесс приложения со звуковым сеансом: сначала с тем же путём, иначе любой с тем же
-/// именем файла (после обновления папка могла смениться)
+/// The app's process with an audio session: one with the same path first, else any with the same
+/// file name (an update may have changed the folder)
 fn find(processes: &HashMap<String, Vec<u32>>, sessions: &HashMap<u32, bool>, exe: &str, path: &str) -> Found {
     let Some(pids) = processes.get(exe) else {
         return Found::Absent;
@@ -250,14 +250,14 @@ impl Router {
         if self.factory.is_none() {
             let class = HSTRING::from("Windows.Media.Internal.AudioPolicyConfig");
             let fail = |e: windows::core::Error| tr!(
-                "Windows не дала менять устройства приложений: {error}",
+                "error_app_devices_denied",
                 error = e.message()
             );
             let unknown = unsafe { RoGetActivationFactory::<IUnknown>(&class) }.map_err(fail)?;
             let factory = match unknown.cast::<IAudioPolicyConfigFactory>() {
                 Ok(f) => f,
                 Err(_) => {
-                    // Windows 10 (до сборки 21390): тот же интерфейс под старым IID
+                    // Windows 10 (before build 21390): the same interface under the old IID
                     let mut raw = std::ptr::null_mut();
                     unsafe { unknown.query(&DOWNLEVEL_IID, &mut raw) }.ok().map_err(fail)?;
                     unsafe { IAudioPolicyConfigFactory::from_raw(raw) }
@@ -276,19 +276,19 @@ impl Router {
         };
         let json = serde_json::to_vec_pretty(&journal).map_err(|e| e.to_string())?;
         write_atomic(&self.journal_path, &json).map_err(|e| tr!(
-            "не удалось записать журнал устройств: {e}",
+            "error_journal_write",
             e = e
         ))
     }
 
-    /// Устройство приложения; None — своей настройки нет
+    /// The app's device; None means no setting of its own
     fn get(&mut self, pid: u32, flow: Flow) -> Result<Option<String>, String> {
         let factory = self.factory()?;
         let mut raw: *mut c_void = std::ptr::null_mut();
         unsafe { factory.GetPersistedDefaultAudioEndpoint(pid, flow.data_flow(), eConsole, &mut raw) }
             .ok()
-            .map_err(|e| describe(&tr!("чтение устройства приложения"), flow, pid, &e))?;
-        // строку отдала Windows, HSTRING освободит её
+            .map_err(|e| describe(&tr!("step_read_app_device"), flow, pid, &e))?;
+        // Windows handed over the string, HSTRING frees it
         let value: HSTRING = unsafe { std::mem::transmute(raw) };
         let value = value.to_string();
         let id = value.strip_prefix(PREFIX).unwrap_or(&value);
@@ -300,25 +300,25 @@ impl Router {
         let factory = self.factory()?;
         let suffix = if flow == Flow::Render { RENDER_SUFFIX } else { CAPTURE_SUFFIX };
         let value = device.map(|id| HSTRING::from(format!("{PREFIX}{id}{suffix}"))).unwrap_or_default();
-        // HSTRING — указатель; пустой (нулевой) снимает настройку
+        // HSTRING is a pointer; an empty (null) one clears the setting
         let raw: *mut c_void = unsafe { std::mem::transmute_copy(&value) };
         for role in [eMultimedia, eConsole] {
             unsafe { factory.SetPersistedDefaultAudioEndpoint(pid, flow.data_flow(), role, raw) }
                 .ok()
-                .map_err(|e| describe(&tr!("назначение устройства приложению"), flow, pid, &e))?;
+                .map_err(|e| describe(&tr!("step_set_app_device"), flow, pid, &e))?;
         }
         Ok(())
     }
 
-    /// Ставит приложению устройство, сначала запомнив прежнее
+    /// Sets an app's device after remembering the previous one
     fn ensure(&mut self, pid: u32, exe: &str, flow: Flow, want: Option<&str>) -> Result<(), String> {
-        // в Windows 10 чтение бывает недоступно (EarTrumpet тоже его не требует): тогда считаем
-        // текущим то, что ставили сами, а до этого — что своей настройки у приложения не было
+        // on Windows 10 reading can be unavailable (EarTrumpet doesn't need it either): then the current
+        // value is what we set ourselves, and before that, that the app had no setting of its own
         let current = match self.get(pid, flow) {
             Ok(current) => current,
             Err(e) => {
                 if self.read_failed.insert((pid, flow)) {
-                    crate::log::write(format!("не удалось прочитать, продолжаю без него: {e}"));
+                    crate::log::write(format!("failed to read, going on without it: {e}"));
                 }
                 self.applied.get(&(pid, flow)).cloned().flatten()
             }
@@ -339,7 +339,7 @@ impl Router {
         Ok(())
     }
 
-    /// Ставит устройства по умолчанию по ноде «Система», а без неё возвращает прежние
+    /// Sets the default devices from the "System" node, and restores the previous ones without it
     pub fn apply_system(&mut self, system: Option<&SystemRoute>) -> Option<AppStatus> {
         let wanted = [
             (Flow::Render, system.and_then(|s| s.render.clone())),
@@ -358,7 +358,7 @@ impl Router {
                         if !self.defaults.iter().any(|d| d.flow == flow && d.role == role) {
                             self.defaults.push(SavedDefault { flow, role, previous: current });
                             changed = true;
-                            // прежнее устройство записано до изменения: после сбоя его можно вернуть
+                            // the previous device is journaled before the change: it can be restored after a crash
                             if let Err(e) = self.write_journal() {
                                 error.get_or_insert(e);
                                 continue;
@@ -371,7 +371,7 @@ impl Router {
                 }
                 None => {
                     for saved in self.defaults.iter().filter(|d| d.flow == flow) {
-                        // устройства, которое было по умолчанию, могло уже не стать — тогда Windows выбрала другое
+                        // the former default device may be gone: then Windows has chosen another
                         if let Some(previous) = &saved.previous {
                             let _ = set_default(previous, saved.role.erole());
                         }
@@ -392,7 +392,7 @@ impl Router {
         })
     }
 
-    /// Приводит устройства приложений к плану и возвращает прежние тем, кого в плане нет
+    /// Brings app devices in line with the plan and restores the previous ones for apps not in it
     pub fn apply(&mut self, routes: &[AppRoute]) -> Vec<AppStatus> {
         let processes = processes();
         let sessions = session_pids().unwrap_or_default();
@@ -436,7 +436,7 @@ impl Router {
             });
         }
 
-        // возврат прежних устройств
+        // restoring previous devices
         let mut kept = Vec::new();
         let mut restored = false;
         for saved in std::mem::take(&mut self.saved) {
@@ -446,7 +446,7 @@ impl Router {
             }
             match find(&processes, &sessions, &saved.exe, "") {
                 Found::Audio(pid) if self.set(pid, saved.flow, saved.previous.as_deref()).is_ok() => restored = true,
-                // приложение закрыто или без звука: вернём, когда оно откроет звук
+                // the app is closed or without audio: restore when it opens audio
                 _ => kept.push(saved),
             }
         }
@@ -458,8 +458,8 @@ impl Router {
         statuses
     }
 
-    /// Громкость приложений в микшере Windows. На 100% граф громкость приложения не трогает,
-    /// а если трогал раньше — возвращает прежнюю
+    /// App volume in the Windows mixer. At 100% the graph leaves the app's volume alone,
+    /// and if it changed it before, restores the previous one
     fn apply_volumes(&mut self, routes: &[AppRoute], processes: &HashMap<String, Vec<u32>>) {
         let volumes = session_volumes();
         let controls = |exe: &str| -> Vec<&windows::Win32::Media::Audio::ISimpleAudioVolume> {
@@ -493,7 +493,7 @@ impl Router {
         for saved in std::mem::take(&mut self.volumes) {
             let list = controls(&saved.exe);
             if wanted.contains(&saved.exe) || list.is_empty() {
-                // ещё нужна или приложение без звука: вернём позже
+                // still needed or the app has no audio: restore later
                 kept.push(saved);
                 continue;
             }
@@ -516,8 +516,8 @@ mod tests {
     use crate::com::ComGuard;
     use crate::graphs::AppRef;
 
-    /// Назначает устройство вывода самому тесту (его исполняемому файлу) и возвращает прежнее:
-    /// проверяет недокументированный интерфейс и журнал. Другие приложения не трогает:
+    /// Sets an output device for the test itself (its executable file) and restores the previous one:
+    /// checks the undocumented interface and the journal. Other apps are left alone:
     /// cargo test app_routing -- --ignored --nocapture
     #[test]
     #[ignore]
@@ -527,9 +527,9 @@ mod tests {
             .unwrap()
             .into_iter()
             .find(|d| d.name.contains("Virtual Audio Cable") && d.flow == crate::devices::Flow::Render)
-            .expect("нет Virtual Audio Cable")
+            .expect("no Virtual Audio Cable")
             .id;
-        // Windows принимает настройку только у процесса со звуковым сеансом: открываем поток на VAC
+        // Windows accepts the setting only for a process with an audio session: open a stream on VAC
         let _session = unsafe {
             use windows::core::PCWSTR;
             use windows::Win32::Media::Audio::{IAudioClient, IMMDeviceEnumerator, MMDeviceEnumerator, AUDCLNT_SHAREMODE_SHARED};
@@ -550,10 +550,10 @@ mod tests {
         let exe = path.rsplit('\\').next().unwrap().to_string();
 
         let before = router.get(pid, Flow::Render).unwrap();
-        println!("до: {before:?}");
+        println!("before: {before:?}");
         let route = AppRoute {
             node: "n".into(),
-            app: AppRef { exe, path, name: "тест".into() },
+            app: AppRef { exe, path, name: "test".into() },
             render: Some(Target::Device(vac.clone())),
             capture: None,
             volume: 0.5,
@@ -568,11 +568,11 @@ mod tests {
         let during = router.get(pid, Flow::Render).unwrap();
         let volume_during = volume();
         let journal = fs::read_to_string(dir.join("app-routing.json")).unwrap_or_default();
-        println!("во время: {during:?} громкость {volume_during:?} {statuses:?}\nжурнал: {journal}");
+        println!("during: {during:?} volume {volume_during:?} {statuses:?}\njournal: {journal}");
 
         router.apply(&[]);
         let after = router.get(pid, Flow::Render).unwrap();
-        println!("после: {after:?} громкость {:?}", volume());
+        println!("after: {after:?} volume {:?}", volume());
         assert_eq!(statuses[0].state, AppState::Routed);
         assert_eq!(during.as_deref(), Some(vac.as_str()));
         assert_eq!(volume_during, Some(0.5));

@@ -1,0 +1,4 @@
+# shell scripts must keep LF even on Windows checkouts: bash fails on CRLF
+*.sh text eol=lf
+# cmd misreads labels in batch files with LF line ends
+*.bat text eol=crlf

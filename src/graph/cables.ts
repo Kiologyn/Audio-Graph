@@ -5,20 +5,20 @@ import { t } from "../i18n";
 import { uniqueName } from "./names";
 import type { DeviceRef } from "./types";
 
-/** Кабель — пара системных устройств, общая для всех графов. Совпадает с Cable в cables.rs. */
+/** A cable is a pair of system devices shared by all graphs. Matches Cable in cables.rs. */
 export type Cable = {
   id: string;
   name: string;
-  /** Устройство вывода: в него играют приложения, это вход кабеля */
+  /** The output device: apps play into it, it is the cable's input */
   render: DeviceRef | null;
-  /** Устройство ввода: с него забирают звук, это выход кабеля */
+  /** The input device: sound is taken from it, it is the cable's output */
   capture: DeviceRef | null;
   createdAt: number;
 };
 
 type CablesState = {
   cables: Cable[];
-  /** Список хотя бы раз получен; до этого нельзя судить, что кабель удалён */
+  /** The list was received at least once; before that a cable can't be judged removed */
   loaded: boolean;
   error: string | null;
   load: () => Promise<void>;
@@ -27,8 +27,8 @@ type CablesState = {
   remove: (id: string) => void;
 };
 
-// Изменения применяются в интерфейсе сразу, а на диск уходят строго по очереди:
-// каждый запрос несёт полное состояние кабеля, поэтому последний записанный — самый свежий
+// Changes apply in the interface at once and go to disk strictly in order:
+// every request carries the cable's full state, so the last one written is the latest
 let queue: Promise<void> = Promise.resolve();
 function enqueue(job: () => Promise<unknown>): Promise<void> {
   queue = queue.then(job).then(
@@ -38,7 +38,7 @@ function enqueue(job: () => Promise<unknown>): Promise<void> {
   return queue;
 }
 
-// см. store.ts: при правке модуля в разработке — полная перезагрузка страницы
+// see store.ts: editing this module in development reloads the whole page
 import.meta.hot?.accept(() => location.reload());
 
 export const useCables = create<CablesState>()((set, get) => ({
@@ -53,7 +53,7 @@ export const useCables = create<CablesState>()((set, get) => ({
     }),
 
   create: async () => {
-    const name = uniqueName(t("Кабель"), get().cables.map((c) => c.name));
+    const name = uniqueName(t("node_cable"), get().cables.map((c) => c.name));
     let id = "";
     await enqueue(async () => {
       const cable = await invoke<Cable>("cable_create", { name });
@@ -77,10 +77,10 @@ export const useCables = create<CablesState>()((set, get) => ({
   },
 }));
 
-/** Панель кабелей в шапке: её открывает и выбор кабеля на ноде («Новый кабель…») */
+/** The cable panel in the header: the cable choice on a node opens it too ("New cable…") */
 type CablePanelState = {
   open: boolean;
-  /** Кабель, раскрытый для редактирования */
+  /** The cable expanded for editing */
   editing: string | null;
   show: (editing?: string | null) => void;
   hide: () => void;
@@ -95,17 +95,17 @@ export const useCablePanel = create<CablePanelState>()((set) => ({
   edit: (editing) => set({ editing }),
 }));
 
-/** Системные устройства кабеля */
+/** The cable's system devices */
 export function cableDeviceIds(cable: Cable): string[] {
   return [cable.render, cable.capture].flatMap((d) => (d?.type === "device" ? [d.id] : []));
 }
 
-/** Устройство → имя кабеля, в который оно входит */
+/** Device → name of the cable it belongs to */
 export function cableDeviceOwners(cables: Cable[]): Map<string, string> {
   return new Map(cables.flatMap((c) => cableDeviceIds(c).map((id) => [id, c.name] as const)));
 }
 
-/** Кабель включён, выключен или частично; none — в системе нет его устройств, переключать нечего */
+/** The cable is on, off or partly on; none means the system has none of its devices, nothing to switch */
 export type CablePower = "on" | "off" | "mixed" | "none";
 
 export function cablePower(cable: Cable, devices: AudioDevice[]): CablePower {
@@ -117,7 +117,7 @@ export function cablePower(cable: Cable, devices: AudioDevice[]): CablePower {
   return "mixed";
 }
 
-/** Устройства кабелей, которые нужно переключить, чтобы все они стали включены (или выключены) */
+/** Cable devices to switch so that all of them become on (or off) */
 export function idsToToggle(cables: Cable[], devices: AudioDevice[], enabled: boolean): string[] {
   const ids = new Set(cables.flatMap(cableDeviceIds));
   const from = enabled ? "disabled" : "active";

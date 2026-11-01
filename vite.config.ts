@@ -1,7 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// Tauri ожидает фиксированный порт и сам управляет выводом в консоль
+// Tauri expects a fixed port and manages console output itself
 const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig({

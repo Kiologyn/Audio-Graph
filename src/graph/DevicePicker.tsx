@@ -10,15 +10,15 @@ type Props = {
   slot: DeviceSlot;
   value: DeviceRef | null;
   onChange: (value: DeviceRef | null) => void;
-  /** Не предлагать устройства, из которых собраны кабели (для нод ввода и вывода) */
+  /** Don't offer devices that cables are built from (for input and output nodes) */
   hideCableDevices?: boolean;
-  /** Не предлагать отключённые в системе устройства (для нод ввода и вывода) */
+  /** Don't offer devices disabled in the system (for input and output nodes) */
   hideDisabled?: boolean;
-  /** Дополнительные подсказки к устройствам: id → текст */
+  /** Extra hints for devices: id → text */
   deviceHints?: Map<string, string>;
 };
 
-/** Выбор системного устройства. При каждом открытии просит обновить общий буфер устройств. */
+/** System device choice. Asks to refresh the shared device buffer every time it opens. */
 export function DevicePicker({ flow, slot, value, onChange, hideCableDevices, hideDisabled, deviceHints }: Props) {
   const anchor = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
@@ -30,24 +30,26 @@ export function DevicePicker({ flow, slot, value, onChange, hideCableDevices, hi
   const owners = useMemo(() => cableDeviceOwners(cables), [cables]);
   const t = useT();
 
-  const hidden = (d: AudioDevice) => (hideCableDevices && owners.has(d.id)) || (hideDisabled && d.state === "disabled");
+  // devices of the graph's virtual cables are chosen by the cable node, not here
+  const hidden = (d: AudioDevice) =>
+    d.isVirtual || (hideCableDevices && owners.has(d.id)) || (hideDisabled && d.state === "disabled");
   const visible = devices.filter((d) => d.flow === flow && !hidden(d));
-  // сначала включённые, выключенные — в конце
+  // enabled first, disabled at the end
   const list = [...visible.filter((d) => d.state === "active"), ...visible.filter((d) => d.state !== "active")];
   const defaultDevice = devices.find((d) => d.flow === flow && d.isDefault);
   const { text, missing, disabled } = describeDevice(value, flow, devices, loaded);
-  // устройство, выбранное до того, как его взяли в кабель или отключили: из списка скрыто, но выбор надо показать
+  // a device chosen before it was taken into a cable or disabled: hidden from the list, but the choice must be shown
   const owner = value?.type === "device" ? owners.get(value.id) : undefined;
   const hiddenCurrent =
     value?.type === "device" && ((hideCableDevices && owner) || (hideDisabled && disabled)) ? value : null;
 
   let title = text ?? undefined;
-  if (value?.type === "default") title = defaultDevice ? t("Сейчас: {name}", { name: defaultDevice.name }) : undefined;
-  if (disabled) title = t("{name} — отключено", { name: text ?? "" });
-  if (missing && value?.type === "device") title = t("{name} — сейчас недоступно", { name: value.name });
+  if (value?.type === "default") title = defaultDevice ? t("device_default_now", { name: defaultDevice.name }) : undefined;
+  if (disabled) title = t("device_disabled_named", { name: text ?? "" });
+  if (missing && value?.type === "device") title = t("device_unavailable_named", { name: value.name });
 
   const hint = (d: AudioDevice) =>
-    [d.isDefault && t("по умолчанию"), d.state === "disabled" && t("отключено"), deviceHints?.get(d.id)]
+    [d.isDefault && t("device_default_lower"), d.state === "disabled" && t("device_disabled"), deviceHints?.get(d.id)]
       .filter(Boolean)
       .join(" · ") || null;
 
@@ -77,17 +79,17 @@ export function DevicePicker({ flow, slot, value, onChange, hideCableDevices, hi
           anchor={anchor}
           busy={loading}
           onClose={() => setOpen(false)}
-          footer={value && <PopoverItem name={t("Сбросить выбор")} className="is-dim" onClick={() => select(null)} />}
+          footer={value && <PopoverItem name={t("clear_selection")} className="is-dim" onClick={() => select(null)} />}
         >
           {missing && value?.type === "device" && (
-            <PopoverItem selected className="is-missing" name={value.name} hint={t("недоступно")} onClick={() => select(value)} />
+            <PopoverItem selected className="is-missing" name={value.name} hint={t("device_unavailable")} onClick={() => select(value)} />
           )}
           {hiddenCurrent && (
             <PopoverItem
               selected
               className={disabled ? "is-off" : ""}
               name={text ?? hiddenCurrent.name}
-              hint={[disabled && t("отключено"), owner && t("устройство кабеля «{name}»", { name: owner })].filter(Boolean).join(" · ")}
+              hint={[disabled && t("device_disabled"), owner && t("device_of_cable", { name: owner })].filter(Boolean).join(" · ")}
               onClick={() => select(hiddenCurrent)}
             />
           )}
@@ -95,8 +97,8 @@ export function DevicePicker({ flow, slot, value, onChange, hideCableDevices, hi
             <PopoverItem
               selected={value?.type === "default"}
               className="is-default"
-              name={t("По умолчанию")}
-              hint={defaultDevice?.name ?? t("нет устройства")}
+              name={t("device_default")}
+              hint={defaultDevice?.name ?? t("device_none")}
               onClick={() => select({ type: "default" })}
             />
           )}
@@ -111,7 +113,7 @@ export function DevicePicker({ flow, slot, value, onChange, hideCableDevices, hi
             />
           ))}
           {list.length === 0 && (
-            <div className="ag-popover__empty">{loaded ? t("Нет подходящих устройств") : t("Загрузка…")}</div>
+            <div className="ag-popover__empty">{loaded ? t("devices_none_suitable") : t("loading")}</div>
           )}
           {error && <div className="ag-popover__empty is-error">{error}</div>}
         </Popover>

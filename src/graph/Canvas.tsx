@@ -26,7 +26,7 @@ const defaultEdgeOptions: DefaultEdgeOptions = {
   markerEnd: { type: MarkerType.ArrowClosed, width: 18, height: 18, color: "var(--ag-edge)" },
 };
 
-// миникарта рисует ноды атрибутом fill, CSS-переменные там не работают
+// the minimap paints nodes with the fill attribute, CSS variables don't work there
 const MINIMAP_COLORS: Record<AudioNodeKind, string> = {
   input: "#2fb87c",
   output: "#4a7ef0",
@@ -35,7 +35,7 @@ const MINIMAP_COLORS: Record<AudioNodeKind, string> = {
   system: "#8c96a6",
 };
 
-// стрелка в саму себя бессмысленна; дубликаты связей отсекает addEdge
+// an arrow into itself makes no sense; addEdge drops duplicate edges
 const isValidConnection: IsValidConnection<AudioEdge> = (c) => c.source !== c.target;
 
 type Menu =
@@ -58,20 +58,20 @@ export function Canvas() {
         addNode: s.addNode,
       })),
     );
-  // стрелку, которую оторвали от порта и бросили не на порт, удаляем.
-  // Перетаскивание начинается уже на нажатии мыши, поэтому простой клик у порта
-  // отличаем по расстоянию, иначе клик удалял бы стрелку.
+  // an arrow pulled off a port and dropped elsewhere is deleted.
+  // Dragging starts on mouse down already, so a plain click at a port
+  // is told apart by distance, otherwise a click would delete the arrow.
   const reconnected = useRef(true);
   const reconnectFrom = useRef<XYPosition | null>(null);
   const setViewport = useGraph((s) => s.setViewport);
-  // камера графа нужна только при монтировании, дальше холст управляет ею сам
+  // the graph's camera is needed only on mount, after that the canvas manages it
   const [initialViewport] = useState(() => useGraph.getState().viewport);
   const { screenToFlowPosition, deleteElements } = useReactFlow<AudioNode, AudioEdge>();
   const status = useEngine((s) => s.status);
   const graphId = useGraph((s) => s.meta?.id);
-  // связи, о которых движок сообщил проблему, рисуются красным пунктиром
-  // Пометка ставится и снимается явно: связь, которая когда-то попала в хранилище с пометкой,
-  // не останется красной после исправления
+  // edges the engine reported a problem with are drawn as red dashes
+  // The mark is set and cleared explicitly: an edge that once got into the store with the mark
+  // doesn't stay red after the fix
   const shownEdges = useMemo(() => {
     const own = !!graphId && status.graphId === graphId;
     const flagged = new Set(own ? status.issues.flatMap((i) => i.edges) : []);
@@ -86,9 +86,9 @@ export function Canvas() {
   const hideMinimap = useSettings((s) => s.hideMinimap);
   const t = useT();
 
-  // Ctrl+Z — отмена, Ctrl+Y и Ctrl+Shift+Z — повтор. По коду клавиши, чтобы работало
-  // и в русской раскладке. В текстовых полях у браузера своя отмена текста;
-  // ползунок громкости после перетаскивания остаётся в фокусе, но своей отмены у него нет
+  // Ctrl+Z undoes, Ctrl+Y and Ctrl+Shift+Z redo. By key code, so it works
+  // in other keyboard layouts too. Text fields have the browser's own text undo;
+  // a volume slider keeps focus after dragging but has no undo of its own
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!e.ctrlKey || e.altKey || e.metaKey) return;
@@ -116,14 +116,14 @@ export function Canvas() {
     return () => window.removeEventListener("keydown", onKey);
   }, [menu]);
 
-  // координаты меню относительно контейнера холста
+  // menu coordinates relative to the canvas container
   const local = (e: MouseEvent | ReactMouseEvent) => {
     const rect = wrapper.current!.getBoundingClientRect();
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   };
 
   return (
-    // системное меню WebView (Back, Refresh, Inspect) на холсте не нужно
+    // the canvas doesn't need the WebView system menu (Back, Refresh, Inspect)
     <div className="ag-canvas" ref={wrapper} onContextMenu={(e) => e.preventDefault()}>
       <ReactFlow<AudioNode, AudioEdge>
         nodes={nodes}
@@ -133,7 +133,7 @@ export function Canvas() {
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
         reconnectRadius={14}
-        // выделенная стрелка поднимается наверх, и при общем порте хватается именно она
+        // the selected arrow is raised to the top, so on a shared port it is the one grabbed
         elevateEdgesOnSelect
         onReconnectStart={(e) => {
           reconnected.current = false;
@@ -156,7 +156,7 @@ export function Canvas() {
         deleteKeyCode={["Delete", "Backspace"]}
         colorMode={theme === "system" ? "system" : resolvedTheme(theme)}
         proOptions={{ hideAttribution: true }}
-        // новый граф вписываем в окно, сохранённый открываем там, где его оставили
+        // a new graph is fit to the window, a saved one opens where it was left
         fitView={!initialViewport}
         fitViewOptions={{ padding: 0.3, maxZoom: 1 }}
         defaultViewport={initialViewport ?? undefined}
@@ -191,7 +191,7 @@ export function Canvas() {
         <div className="ag-menu" style={{ left: menu.x, top: menu.y }} onContextMenu={(e) => e.preventDefault()}>
           {menu.type === "pane" ? (
             <>
-              <div className="ag-menu__title">{t("Добавить ноду")}</div>
+              <div className="ag-menu__title">{t("add_node")}</div>
               {KIND_ORDER.map((kind: AudioNodeKind) => (
                 <button
                   key={kind}
@@ -220,7 +220,7 @@ export function Canvas() {
                 setMenu(null);
               }}
             >
-              {t("Удалить")}
+              {t("delete")}
             </button>
           )}
         </div>

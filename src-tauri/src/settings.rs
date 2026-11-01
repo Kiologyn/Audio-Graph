@@ -1,5 +1,5 @@
-//! Настройки приложения: тема, язык, поведение кабелей. Файл preferences.json
-//! (settings.json занят библиотекой графов: там последний открытый граф).
+//! App settings: theme, language, cable behavior. The file is preferences.json
+//! (settings.json belongs to the graph library: it holds the last open graph).
 
 use crate::engine::Engine;
 use crate::storage::{err, write_atomic, CmdResult};
@@ -17,21 +17,21 @@ pub enum Theme {
     Dark,
 }
 
-/// Языки интерфейса. Новый язык: вариант здесь, словарь src/locales/<код>.json,
-/// строка в i18n.rs (Rust) и в LANGUAGES в src/i18n.ts (интерфейс)
+/// Interface languages. A new language: a variant here, a dictionary src/locales/<code>.json,
+/// a row in i18n.rs (Rust) and in LANGUAGES in src/i18n.ts (interface)
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 #[repr(u8)]
 pub enum Language {
-    Ru,
     En,
+    Ru,
     Es,
     Zh,
     Ja,
 }
 
 impl Language {
-    pub const ALL: [Language; 5] = [Language::Ru, Language::En, Language::Es, Language::Zh, Language::Ja];
+    pub const ALL: [Language; 5] = [Language::En, Language::Ru, Language::Es, Language::Zh, Language::Ja];
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -39,12 +39,12 @@ impl Language {
 pub struct Settings {
     pub theme: Theme,
     pub language: Language,
-    /// Выключать кабели запущенного графа, когда он останавливается и когда программа закрывается;
-    /// при запуске графа его кабели включаются
+    /// Turn a running graph's cables off when it stops and when the app closes;
+    /// a graph's cables are turned on when it starts
     pub disable_idle_cables: bool,
-    /// Убрать карту графа из правого нижнего угла холста
+    /// Hide the graph minimap in the bottom right corner of the canvas
     pub hide_minimap: bool,
-    /// Галочка громкости у нового графа: показывать ли на его нодах регуляторы
+    /// The volume checkbox of a new graph: whether its nodes show volume sliders
     pub new_graph_volume: bool,
 }
 
@@ -60,17 +60,32 @@ impl Default for Settings {
     }
 }
 
-/// Язык интерфейса Windows, если он есть среди языков приложения; иначе английский
+/// The system's interface language if the app has it; English otherwise
 fn system_language() -> Language {
     #[cfg(windows)]
     {
-        // младшие 10 бит LANGID — основной язык
+        // the low 10 bits of a LANGID are the primary language
         let id = unsafe { windows::Win32::Globalization::GetUserDefaultUILanguage() };
         match id & 0x3ff {
             0x19 => return Language::Ru,
             0x0a => return Language::Es,
             0x04 => return Language::Zh,
             0x11 => return Language::Ja,
+            _ => {}
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        // the message language as gettext picks it: ru_RU.UTF-8 → ru
+        let locale = ["LC_ALL", "LC_MESSAGES", "LANG"]
+            .iter()
+            .find_map(|v| std::env::var(v).ok().filter(|l| !l.is_empty()))
+            .unwrap_or_default();
+        match locale.get(..2) {
+            Some("ru") => return Language::Ru,
+            Some("es") => return Language::Es,
+            Some("zh") => return Language::Zh,
+            Some("ja") => return Language::Ja,
             _ => {}
         }
     }
@@ -112,7 +127,7 @@ pub fn settings_set(store: State<SettingsStore>, engine: State<Engine>, settings
     let json = serde_json::to_vec_pretty(&settings).map_err(err)?;
     write_atomic(&store.path, &json).map_err(err)?;
     crate::i18n::set_language(settings.language);
-    // движок пересоберёт сообщения на новом языке и обновит трей
+    // the engine rebuilds its messages in the new language and updates the tray
     engine.settings_changed(&settings);
     *current = settings;
     Ok(())

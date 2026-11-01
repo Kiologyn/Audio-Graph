@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { DocEdge, DocNode, GraphDoc, GraphMeta } from "./doc";
 
-// обёртки над командами из src-tauri/src/graphs.rs
+// wrappers over the commands of src-tauri/src/graphs.rs
 
 export const graphsApi = {
   init: () => invoke<{ graphs: GraphMeta[]; lastOpened: string | null }>("graphs_init"),

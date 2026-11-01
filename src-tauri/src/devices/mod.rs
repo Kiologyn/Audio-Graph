@@ -1,17 +1,19 @@
-//! Список аудиоустройств системы. Перечисление зависит от платформы,
-//! снаружи модуль одинаковый.
+//! The system's audio device list. Enumeration depends on the platform,
+//! the module looks the same from outside.
 
 use serde::Serialize;
 
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(windows)]
 pub(crate) mod win;
 
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Flow {
-    /// Устройство вывода: в него играют (колонки, наушники, вход кабеля)
+    /// An output device: sound is played into it (speakers, headphones, a cable's input)
     Render,
-    /// Устройство ввода: с него записывают (микрофон, выход кабеля)
+    /// An input device: sound is recorded from it (a microphone, a cable's output)
     Capture,
 }
 
@@ -19,33 +21,39 @@ pub enum Flow {
 #[serde(rename_all = "snake_case")]
 pub enum DeviceState {
     Active,
-    /// Выключено в настройках звука; можно включить программно
+    /// Turned off in the sound settings; can be turned on programmatically (Windows only)
+    #[cfg_attr(not(windows), allow(dead_code))]
     Disabled,
 }
 
 #[derive(Serialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct AudioDevice {
-    /// Системный идентификатор устройства, на Windows — endpoint ID
+    /// The system's device id, an endpoint ID on Windows
     pub id: String,
     pub name: String,
     pub flow: Flow,
     pub state: DeviceState,
-    /// Устройство по умолчанию в системе для своего направления
+    /// The system default device for its direction
     pub is_default: bool,
+    /// A cable device the graph created itself (Linux): nodes don't choose it
+    pub is_virtual: bool,
 }
 
-/// Включённые и выключенные устройства вывода и ввода
+/// Enabled and disabled output and input devices
 pub fn list() -> Result<Vec<AudioDevice>, String> {
     #[cfg(windows)]
     return win::list().map_err(|e| e.to_string());
 
-    // Linux (PipeWire) и macOS пока не реализованы
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    return linux::list();
+
+    // macOS isn't implemented yet
+    #[cfg(not(any(windows, target_os = "linux")))]
     Ok(Vec::new())
 }
 
-/// Включает или выключает устройства, как это делают настройки звука системы
+/// Turns devices on or off the way the system's sound settings do
 pub fn set_enabled(ids: &[String], enabled: bool) -> Result<(), String> {
     #[cfg(windows)]
     return win::set_enabled(ids, enabled);
@@ -53,19 +61,22 @@ pub fn set_enabled(ids: &[String], enabled: bool) -> Result<(), String> {
     #[cfg(not(windows))]
     {
         let _ = (ids, enabled);
-        Err(tr!("включение и выключение устройств пока есть только на Windows"))
+        Err(tr!("error_device_control_windows_only"))
     }
 }
 
-/// Текущие устройства по умолчанию (вывод, ввод); вызывается из потока движка
+/// Current default devices (output, input); called from the engine thread
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn defaults() -> (Option<String>, Option<String>) {
     #[cfg(windows)]
     return win::defaults();
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    return linux::defaults();
+    #[cfg(not(any(windows, target_os = "linux")))]
     (None, None)
 }
 
-/// Перечисление идёт через COM, поэтому выполняется вне потока окна
+/// Enumeration goes through COM, so it runs off the window thread
 #[tauri::command]
 pub async fn audio_devices() -> Result<Vec<AudioDevice>, String> {
     tauri::async_runtime::spawn_blocking(list)
@@ -84,19 +95,19 @@ pub async fn set_devices_enabled(ids: Vec<String>, enabled: bool) -> Result<(), 
 mod tests {
     use super::*;
 
-    /// Печатает устройства этой машины и время перечисления:
+    /// Prints this machine's devices and the enumeration time:
     /// cargo test devices -- --nocapture
     #[test]
     fn lists_devices() {
         let started = std::time::Instant::now();
-        let devices = list().expect("перечисление устройств");
-        println!("{} устройств за {:?}", devices.len(), started.elapsed());
+        let devices = list().expect("device enumeration");
+        println!("{} devices in {:?}", devices.len(), started.elapsed());
         for d in &devices {
             println!("{:?} {:?}{} {}  [{}]", d.flow, d.state, if d.is_default { " *" } else { "" }, d.name, d.id);
         }
     }
 
-    /// Назначает устройствами по умолчанию те же, что уже стоят: проверяет вызов, ничего не меняя.
+    /// Sets as defaults the same devices that already are: checks the call without changing anything.
     /// cargo test sets_same_default -- --ignored --nocapture
     #[test]
     #[ignore]
@@ -118,8 +129,8 @@ mod tests {
         list().ok()?.into_iter().find(|d| d.id == id).map(|d| d.state)
     }
 
-    /// Переключает реальное устройство записи Virtual Audio Cable и сразу включает обратно.
-    /// Меняет состояние системы, поэтому запускается только явно:
+    /// Toggles a real Virtual Audio Cable recording device and turns it back on right away.
+    /// Changes the system state, so it runs only explicitly:
     /// cargo test toggles_vac -- --ignored --nocapture
     #[test]
     #[ignore]
@@ -129,19 +140,19 @@ mod tests {
             .into_iter()
             .filter(|d| d.name.contains("Virtual Audio Cable"))
             .collect();
-        assert!(!vac.is_empty(), "устройств Virtual Audio Cable нет");
+        assert!(!vac.is_empty(), "no Virtual Audio Cable devices");
         let ids: Vec<String> = vac.iter().map(|d| d.id.clone()).collect();
 
-        // включение уже включённых устройств ничего не меняет, но проверяет вызов и права
-        println!("включение (без изменений): {:?}", set_enabled(&ids, true));
+        // turning on devices that are already on changes nothing but checks the call and rights
+        println!("turning on (no change): {:?}", set_enabled(&ids, true));
 
-        let capture = vac.iter().find(|d| d.flow == Flow::Capture).expect("устройство записи VAC");
+        let capture = vac.iter().find(|d| d.flow == Flow::Capture).expect("VAC recording device");
         let id = vec![capture.id.clone()];
         let disabled = set_enabled(&id, false);
-        println!("выключение: {disabled:?}, состояние: {:?}", state_of(&capture.id));
-        // включаем обратно в любом случае
+        println!("turning off: {disabled:?}, state: {:?}", state_of(&capture.id));
+        // turn it back on in any case
         let enabled = set_enabled(&id, true);
-        println!("включение: {enabled:?}, состояние: {:?}", state_of(&capture.id));
-        assert_eq!(state_of(&capture.id), Some(DeviceState::Active), "устройство должно снова быть включено");
+        println!("turning on: {enabled:?}, state: {:?}", state_of(&capture.id));
+        assert_eq!(state_of(&capture.id), Some(DeviceState::Active), "the device must be on again");
     }
 }

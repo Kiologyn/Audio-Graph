@@ -1,4 +1,4 @@
-//! Устройства через Windows Core Audio (MMDevice API) и недокументированный IPolicyConfig.
+//! Devices through Windows Core Audio (MMDevice API) and the undocumented IPolicyConfig.
 
 use super::{AudioDevice, DeviceState, Flow};
 use crate::com::{take_string, wide, ComGuard};
@@ -28,13 +28,13 @@ fn friendly_name(device: &IMMDevice) -> Option<String> {
 
 fn list_flow(enumerator: &IMMDeviceEnumerator, flow: EDataFlow, kind: Flow) -> Result<Vec<AudioDevice>> {
     unsafe {
-        // устройства по умолчанию может не быть вовсе (например, нет ни одного микрофона)
+        // there may be no default device at all (for example, no microphone)
         let default_id = enumerator
             .GetDefaultAudioEndpoint(flow, eConsole)
             .ok()
             .and_then(|d| device_id(&d).ok());
-        // выключенные тоже нужны: их показывают и включают обратно.
-        // Отсоединённые гнёзда и удалённые устройства не берём, их не включить.
+        // disabled ones are needed too: they are shown and turned back on.
+        // Unplugged jacks and removed devices are skipped, they can't be turned on.
         let mask = DEVICE_STATE(DEVICE_STATE_ACTIVE.0 | DEVICE_STATE_DISABLED.0);
         let collection = enumerator.EnumAudioEndpoints(flow, mask)?;
         let mut devices = Vec::new();
@@ -47,8 +47,9 @@ fn list_flow(enumerator: &IMMDeviceEnumerator, flow: EDataFlow, kind: Flow) -> R
                 DeviceState::Disabled
             };
             devices.push(AudioDevice {
-                name: friendly_name(&device).unwrap_or_else(|| tr!("Без названия")),
+                name: friendly_name(&device).unwrap_or_else(|| tr!("device_unnamed")),
                 is_default: default_id.as_deref() == Some(id.as_str()),
+                is_virtual: false,
                 flow: kind,
                 state,
                 id,
@@ -62,7 +63,7 @@ pub fn defaults() -> (Option<String>, Option<String>) {
     (default_id(eRender, eConsole), default_id(eCapture, eConsole))
 }
 
-/// Устройство по умолчанию для направления и роли (обычное, мультимедиа, связь)
+/// The default device for a direction and role (console, multimedia, communications)
 pub fn default_id(flow: EDataFlow, role: ERole) -> Option<String> {
     let _com = ComGuard::init();
     let enumerator: IMMDeviceEnumerator = unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }.ok()?;
@@ -78,13 +79,13 @@ pub fn list() -> Result<Vec<AudioDevice>> {
     Ok(devices)
 }
 
-/// Недокументированный интерфейс, через который панель «Звук» включает и выключает
-/// устройства и меняет устройство по умолчанию (им же пользуются EarTrumpet, SoundSwitch,
-/// AudioDeviceCmdlets). Порядок методов — это таблица виртуальных функций, менять его нельзя:
-/// ошибка сдвигает вызовы на соседние методы.
+/// The undocumented interface the Sound control panel uses to turn devices on and off
+/// and change the default device (EarTrumpet, SoundSwitch and AudioDeviceCmdlets
+/// use it too). The method order is the virtual function table and must not change:
+/// a mistake shifts calls to neighboring methods.
 mod policy {
-    // макрос interface не принимает атрибуты на трейте, поэтому разрешения на весь модуль:
-    // имена методов как в Windows, а большая часть методов нам не нужна
+    // the interface macro takes no attributes on the trait, so the allows are module-wide:
+    // method names are as in Windows, and most methods aren't used
     #![allow(non_snake_case, dead_code)]
 
     use std::ffi::c_void;
@@ -112,11 +113,11 @@ mod policy {
 
 use policy::{IPolicyConfig, CLSID_POLICY_CONFIG_CLIENT};
 
-/// Делает устройство устройством по умолчанию для роли — как кнопка в панели «Звук»
+/// Makes a device the default for a role, like the button in the Sound control panel
 pub fn set_default(id: &str, role: ERole) -> std::result::Result<(), String> {
     let _com = ComGuard::init();
     let policy: IPolicyConfig = unsafe { CoCreateInstance(&CLSID_POLICY_CONFIG_CLIENT, None, CLSCTX_ALL) }
-        .map_err(|e| tr!("управление устройствами недоступно: {e}", e = e))?;
+        .map_err(|e| tr!("error_device_control_unavailable", e = e))?;
     let id = wide(id);
     unsafe { policy.SetDefaultEndpoint(PCWSTR(id.as_ptr()), role) }
         .ok()
@@ -126,15 +127,15 @@ pub fn set_default(id: &str, role: ERole) -> std::result::Result<(), String> {
 pub fn set_enabled(ids: &[String], enabled: bool) -> std::result::Result<(), String> {
     let _com = ComGuard::init();
     let policy: IPolicyConfig = unsafe { CoCreateInstance(&CLSID_POLICY_CONFIG_CLIENT, None, CLSCTX_ALL) }
-        .map_err(|e| tr!("управление устройствами недоступно: {e}", e = e))?;
-    // пробуем все устройства, даже если какое-то не переключилось
+        .map_err(|e| tr!("error_device_control_unavailable", e = e))?;
+    // try all devices even if one didn't switch
     let mut first_error = None;
     for id in ids {
         let id = wide(id);
         let result = unsafe { policy.SetEndpointVisibility(PCWSTR(id.as_ptr()), enabled.into()) }.ok();
         if let Err(e) = result {
             first_error.get_or_insert(if e.code() == E_ACCESSDENIED {
-                tr!("Windows не разрешила изменить состояние устройства: нужны права администратора")
+                tr!("error_device_state_admin")
             } else {
                 e.to_string()
             });

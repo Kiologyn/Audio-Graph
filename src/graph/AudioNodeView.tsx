@@ -1,6 +1,7 @@
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { memo, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useT } from "../i18n";
+import { dynamicCables, virtualDeviceName } from "../platform";
 import { AppPicker } from "./AppPicker";
 import { CablePicker } from "./CablePicker";
 import { useCables } from "./cables";
@@ -12,32 +13,45 @@ import { nodeNotes } from "./problems";
 import { useGraph } from "./store";
 import { NODE_KINDS, type AudioNode } from "./types";
 
-/** Устройства по умолчанию в Windows сейчас; пока граф с этой нодой запущен, их назначает он */
+/** The system's default devices now; while a graph with this node runs, it sets them */
 function SystemDefaults() {
   const devices = useDevices((s) => s.devices);
   const t = useT();
-  const name = (flow: "render" | "capture") => devices.find((d) => d.flow === flow && d.isDefault)?.name ?? t("нет");
+  const name = (flow: "render" | "capture") => devices.find((d) => d.flow === flow && d.isDefault)?.name ?? t("none");
   return (
     <dl
       className="ag-node__defaults"
       title={t(
-        "Выход ноды — звук приложений, которые играют в устройство вывода по умолчанию. Вход — то, что они слышат как микрофон по умолчанию. Пока граф запущен, устройства по умолчанию назначает он, после остановки возвращаются прежние",
+        "system_node_hint",
       )}
     >
-      <dt>{t("Вывод")}</dt>
+      <dt>{t("node_output")}</dt>
       <dd>{name("render")}</dd>
-      <dt>{t("Ввод")}</dt>
+      <dt>{t("node_input")}</dt>
       <dd>{name("capture")}</dd>
     </dl>
   );
 }
 
-/** Ползунок громкости ноды. Двойной клик по проценту — снова 100% */
+/** A cable on Linux: a device the graph creates itself; programs see it under this name */
+function VirtualCable({ label }: { label: string }) {
+  const t = useT();
+  return (
+    <div
+      className="ag-node__virtual"
+      title={t("virtual_cable_hint")}
+    >
+      <span>{virtualDeviceName(label)}</span>
+    </div>
+  );
+}
+
+/** A node's volume slider. Double-clicking the percentage resets it to 100% */
 function VolumeSlider({ id, value, max }: { id: string; value: number; max: number }) {
   const setVolume = useGraph((s) => s.setVolume);
   const graphId = useGraph((s) => s.meta?.id);
   const t = useT();
-  // движку — не чаще раза в 50 мс: при перетаскивании событий намного больше
+  // to the engine at most once per 50 ms: dragging fires far more events
   const last = useRef(0);
   const pending = useRef<number | null>(null);
   const change = (volume: number) => {
@@ -55,7 +69,7 @@ function VolumeSlider({ id, value, max }: { id: string; value: number; max: numb
   };
   const percent = Math.round(value * 100);
   return (
-    <div className="ag-volume nodrag" title={t("Громкость. Двойной клик по проценту — 100%")}>
+    <div className="ag-volume nodrag" title={t("volume_hint")}>
       <input
         type="range"
         min={0}
@@ -85,7 +99,7 @@ function AudioNodeView({ id, data, selected }: NodeProps<AudioNode>) {
   const devices = useDevices((s) => s.devices);
   const showVolume = useGraph((s) => s.meta?.showVolume ?? true);
   const t = useT();
-  // t в зависимостях: тексты пометок переводятся при смене языка
+  // t in the dependencies: note texts are translated when the language changes
   const { notes, flagged } = useMemo(
     () => nodeNotes(id, data, status, graphId, cables, devices),
     [id, data, status, graphId, cables, devices, t],
@@ -121,16 +135,19 @@ function AudioNodeView({ id, data, selected }: NodeProps<AudioNode>) {
           }}
         />
       ) : (
-        <div className="ag-node__label" onDoubleClick={() => setEditing(true)} title={t("Двойной клик — переименовать")}>
+        <div className="ag-node__label" onDoubleClick={() => setEditing(true)} title={t("rename_hint")}>
           {data.label}
         </div>
       )}
 
-      {meta.pickCable && (
-        <div className="ag-node__devices">
-          <CablePicker value={data.cable} onChange={(cable) => setCable(id, cable)} />
-        </div>
-      )}
+      {meta.pickCable &&
+        (dynamicCables() ? (
+          <VirtualCable label={data.label} />
+        ) : (
+          <div className="ag-node__devices">
+            <CablePicker value={data.cable} onChange={(cable) => setCable(id, cable)} />
+          </div>
+        ))}
 
       {(meta.sink || meta.source) && (
         <div className="ag-node__devices">

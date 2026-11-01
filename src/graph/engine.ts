@@ -4,30 +4,30 @@ import { create } from "zustand";
 import { useDevices } from "./devices";
 import { flushSave } from "./library";
 
-/** Совпадает с engine/mod.rs и engine/plan.rs */
+/** Matches engine/mod.rs and engine/plan.rs */
 export type Issue = { nodes: string[]; edges: string[]; message: string };
 export type DeviceError = { device: string; message: string };
 export type StreamStatus = { sink: string; sources: string[]; errors: DeviceError[] };
 export type AppStatus = {
   node: string;
   /**
-   * not_running — приложение закрыто, no_audio — ещё не открывало звук;
-   * в обоих случаях устройства назначатся сами, как только станет можно
+   * not_running: the app is closed, no_audio: it hasn't opened audio yet;
+   * in both cases devices are assigned by themselves as soon as possible
    */
   state: "routed" | "not_running" | "no_audio" | "failed";
   error: string | null;
 };
 export type EngineStatus = {
-  /** id запущенных графов в порядке запуска */
+  /** ids of running graphs in start order */
   running: string[];
-  /** граф, к которому относятся issues: открытый в окне, а без него — первый запущенный */
+  /** the graph the issues belong to: the one open in the window, or else the first running one */
   graphId: string | null;
   issues: Issue[];
-  /** устройства всех запущенных графов */
+  /** devices of all running graphs */
   streams: StreamStatus[];
-  /** приложения всех запущенных графов */
+  /** apps of all running graphs */
   apps: AppStatus[];
-  /** запущенные графы, у которых что-то не работает */
+  /** running graphs where something doesn't work */
   troubled: string[];
 };
 
@@ -39,16 +39,16 @@ type EngineState = {
   init: () => void;
   start: (graphId: string) => Promise<void>;
   stop: (graphId: string) => Promise<void>;
-  /** Громкость ноды на ходу, пока двигают ползунок: движку не ждать автосохранения */
+  /** Node volume on the fly while the slider moves: the engine doesn't wait for autosave */
   volume: (graphId: string, node: string, volume: number) => void;
 };
 
 let initOnce = false;
 
-// см. store.ts: при правке модуля в разработке — полная перезагрузка страницы
+// see store.ts: editing this module in development reloads the whole page
 import.meta.hot?.accept(() => location.reload());
 
-/** Состояние движка; источник правды — Rust, сюда оно приходит событием engine-status */
+/** Engine state; Rust is the source of truth, it arrives here with the engine-status event */
 export const useEngine = create<EngineState>()((set, get) => ({
   status: EMPTY,
   error: null,
@@ -58,16 +58,16 @@ export const useEngine = create<EngineState>()((set, get) => ({
     initOnce = true;
     listen<EngineStatus>("engine-status", (e) => {
       set({ status: e.payload });
-      // движок мог поменять устройства по умолчанию: ноды «Система» и «по умолчанию» показывают их
+      // the engine may have changed the default devices: "System" and "default" nodes show them
       useDevices.getState().refresh();
     });
     invoke<EngineStatus>("engine_status").then((status) => set({ status }));
   },
 
   start: async (graphId) => {
-    // движок читает граф с диска: сначала дописываем несохранённые правки
+    // the engine reads the graph from disk: write unsaved edits first
     await flushSave();
-    // кнопка отзывается сразу, подробности приходят со статусом
+    // the button responds at once, details come with the status
     const without = (s: EngineStatus) => s.running.filter((id) => id !== graphId);
     set({ status: { ...get().status, running: [...without(get().status), graphId] }, error: null });
     try {

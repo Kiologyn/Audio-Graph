@@ -1,10 +1,10 @@
 @echo off
-rem Audio Graph in development mode: UI and Rust changes are picked up while it runs.
+rem Starts Audio Graph in development mode: interface and Rust changes are picked up while it runs.
 rem Keep this file ASCII-only: cmd misreads non-ASCII text in batch files.
-cd /d "%~dp0"
+cd /d "%~dp0..\.."
 
 if not exist node_modules (
-    echo Installing dependencies...
+    echo Installing npm packages...
     call npm install || goto :error
 )
 

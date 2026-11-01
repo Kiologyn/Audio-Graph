@@ -1,5 +1,5 @@
-//! Потоки движка на WASAPI: на каждое устройство записи и каждое устройство вывода
-//! по своему потоку. Запись раздаёт пакеты во все связи, вывод смешивает свои связи.
+//! Engine streams on WASAPI: every recording device and every output device
+//! gets its own stream. Recording hands packets to all links, output mixes its links.
 
 use super::super::link::{link, LinkReader, CHANNELS, RATE};
 use super::super::plan::Stream;
@@ -24,12 +24,12 @@ use windows::Win32::System::Threading::{
     AvRevertMmThreadCharacteristics, AvSetMmThreadCharacteristicsW, CreateEventW, WaitForSingleObject,
 };
 
-/// Упавший поток (устройство пропало, занято) перезапускается не чаще этого
+/// A failed stream (device gone or busy) restarts no more often than this
 const RETRY: Duration = Duration::from_secs(2);
-/// Буфер устройства, в сотнях наносекунд
+/// The device buffer, in hundreds of nanoseconds
 const BUFFER_HNS: i64 = 200_000;
 
-/// Формат движка; AUTOCONVERTPCM просит Windows перевести его в формат устройства
+/// The engine format; AUTOCONVERTPCM asks Windows to convert it to the device format
 const FORMAT: WAVEFORMATEX = WAVEFORMATEX {
     wFormatTag: 3, // WAVE_FORMAT_IEEE_FLOAT
     nChannels: CHANNELS as u16,
@@ -43,27 +43,27 @@ const FLAGS: u32 =
     AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    // паника в одном потоке звука не должна ронять остальные
+    // a panic in one audio thread must not bring down the others
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 fn describe(e: windows::core::Error) -> String {
     match e.code() {
-        AUDCLNT_E_DEVICE_INVALIDATED => tr!("устройство отключено"),
-        AUDCLNT_E_DEVICE_IN_USE => tr!("устройство занято другим приложением в монопольном режиме"),
+        AUDCLNT_E_DEVICE_INVALIDATED => tr!("error_device_disconnected"),
+        AUDCLNT_E_DEVICE_IN_USE => tr!("error_device_exclusive"),
         _ => e.message(),
     }
 }
 
-/// Список связей устройства; меняется на ходу, поток читает его на каждом пакете
+/// A device's link list; changes on the fly, the stream reads it on every packet
 type Links<T> = Arc<Mutex<Vec<(String, T)>>>;
 type Body<T> = fn(&str, &Mutex<Vec<(String, T)>>, &AtomicBool, &AtomicBool) -> Result<(), String>;
 
-/// Поток одного устройства
+/// The stream of one device
 struct Worker<T> {
     links: Links<T>,
     stop: Arc<AtomicBool>,
-    /// Устройство открыто и звук идёт
+    /// The device is open and sound flows
     working: Arc<AtomicBool>,
     thread: Option<JoinHandle<Result<(), String>>>,
     started: Option<Instant>,
@@ -82,7 +82,7 @@ impl<T: Send + 'static> Worker<T> {
         }
     }
 
-    /// Запускает поток, если он не идёт; упавший — не чаще раза в RETRY
+    /// Starts the stream if it isn't running; a failed one at most once per RETRY
     fn supervise(&mut self, device: &str, body: Body<T>) {
         if self.thread.as_ref().is_some_and(|t| !t.is_finished()) {
             return;
@@ -90,7 +90,7 @@ impl<T: Send + 'static> Worker<T> {
         if let Some(thread) = self.thread.take() {
             self.error = match thread.join() {
                 Ok(result) => result.err(),
-                Err(_) => Some(tr!("сбой потока звука")),
+                Err(_) => Some(tr!("error_stream_crashed")),
             };
         }
         if self.started.is_some_and(|t| t.elapsed() < RETRY) {
@@ -135,9 +135,9 @@ pub struct Streams {
 }
 
 impl Streams {
-    /// Приводит потоки к плану: новые связи добавляются, лишние убираются, на ходу
+    /// Brings streams in line with the plan on the fly: new links are added, extra ones removed
     pub fn apply(&mut self, plan: &[Stream]) -> Vec<StreamStatus> {
-        // связь → громкость
+        // link → volume
         let wanted: BTreeMap<(&str, &str), f32> = plan
             .iter()
             .flat_map(|s| s.sources.iter().map(|src| ((src.device.as_str(), s.sink.as_str()), src.gain)))
@@ -149,7 +149,7 @@ impl Streams {
         for (device, w) in &self.renders {
             let mut links = lock(&w.links);
             links.retain(|(source, _)| wanted.contains_key(&(source.as_str(), device.as_str())));
-            // громкость меняется на ходу, без пересоздания связи
+            // volume changes on the fly without recreating the link
             for (source, reader) in links.iter() {
                 reader.set_gain(wanted[&(source.as_str(), device.as_str())]);
             }
@@ -166,7 +166,7 @@ impl Streams {
             lock(&render.links).push((source.to_string(), reader));
         }
 
-        // устройства без связей закрываются
+        // devices without links are closed
         let unused: Vec<String> = self.captures.iter().filter(|(_, w)| lock(&w.links).is_empty()).map(|(d, _)| d.clone()).collect();
         for device in unused {
             self.captures.remove(&device).unwrap().shutdown();
@@ -205,7 +205,7 @@ impl Streams {
     }
 }
 
-/// Событие, которым WASAPI будит поток, когда пора забрать или отдать пакет
+/// The event WASAPI wakes the thread with when a packet is due
 struct Event(HANDLE);
 
 impl Drop for Event {
@@ -214,7 +214,7 @@ impl Drop for Event {
     }
 }
 
-/// Поток звука получает приоритет планировщика мультимедиа, как у звуковых программ
+/// An audio thread gets the multimedia scheduler priority, like audio software
 struct ProAudio(Option<HANDLE>);
 
 impl ProAudio {
@@ -232,14 +232,14 @@ impl Drop for ProAudio {
     }
 }
 
-/// Открывает устройство и настраивает поток в формате движка
+/// Opens the device and sets up a stream in the engine format
 fn open(device: &str) -> Result<(IAudioClient, Event), String> {
     unsafe {
         let enumerator: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL).map_err(describe)?;
         let id = wide(device);
-        let mm = enumerator.GetDevice(PCWSTR(id.as_ptr())).map_err(|_| tr!("устройство не найдено"))?;
+        let mm = enumerator.GetDevice(PCWSTR(id.as_ptr())).map_err(|_| tr!("error_device_not_found"))?;
         if mm.GetState().map_err(describe)? != DEVICE_STATE_ACTIVE {
-            return Err(tr!("устройство выключено или отсоединено"));
+            return Err(tr!("error_device_disabled"));
         }
         let client: IAudioClient = mm.Activate(CLSCTX_ALL, None).map_err(describe)?;
         let event = Event(CreateEventW(None, false, false, None).map_err(describe)?);
@@ -310,7 +310,7 @@ unsafe fn render_loop(
 ) -> windows::core::Result<()> {
     let render: IAudioRenderClient = client.GetService()?;
     let size = client.GetBufferSize()?;
-    // до старта буфер устройства заполняется тишиной, чтобы начало не щёлкнуло
+    // before the start the device buffer is filled with silence so the beginning doesn't click
     render.GetBuffer(size)?;
     render.ReleaseBuffer(size, AUDCLNT_BUFFERFLAGS_SILENT.0 as u32)?;
     client.Start()?;
@@ -327,7 +327,7 @@ unsafe fn render_loop(
         for (_, reader) in lock(links).iter_mut() {
             reader.mix_into(out);
         }
-        // сумма нескольких источников может выйти за пределы
+        // the sum of several sources can go out of range
         for s in out.iter_mut() {
             *s = s.clamp(-1.0, 1.0);
         }
@@ -344,8 +344,8 @@ mod tests {
     use super::*;
     use crate::devices::{list, Flow};
 
-    /// Играет тон во вход VAC (Line 1) и слушает его выход: проверяет запись, воспроизведение
-    /// и полную задержку. Слышно только тому, кто слушает этот кабель:
+    /// Plays a tone into the VAC input (Line 1) and listens to its output: checks recording, playback
+    /// and the full latency. Only someone listening to that cable hears it:
     /// cargo test vac_loopback -- --ignored --nocapture
     #[test]
     #[ignore]
@@ -355,7 +355,7 @@ mod tests {
             devices
                 .iter()
                 .find(|d| d.name.contains("Virtual Audio Cable") && d.flow == flow)
-                .expect("нет Virtual Audio Cable")
+                .expect("no Virtual Audio Cable")
                 .id
                 .clone()
         };
@@ -373,7 +373,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(300));
         assert!(capture.error().is_none() && render.error().is_none(), "{:?} {:?}", capture.error(), render.error());
 
-        // тон 440 Гц пакетами по 10 мс; выход кабеля слушаем всё это время
+        // a 440 Hz tone in 10 ms packets; the cable output is listened to all this time
         let started = Instant::now();
         let (mut phase, mut onset, mut energy, mut count) = (0usize, None, 0.0f64, 0usize);
         let mut buf = vec![0.0f32; RATE * CHANNELS];
@@ -398,9 +398,9 @@ mod tests {
             }
         }
         let rms = (energy / count.max(1) as f64).sqrt();
-        println!("звук на выходе кабеля через {onset:?}, громкость (RMS) {rms:.3}, ожидалось ~0.354");
+        println!("sound at the cable output after {onset:?}, level (RMS) {rms:.3}, expected ~0.354");
         render.shutdown();
         capture.shutdown();
-        assert!(onset.is_some() && rms > 0.1, "тон не дошёл");
+        assert!(onset.is_some() && rms > 0.1, "the tone didn't arrive");
     }
 }

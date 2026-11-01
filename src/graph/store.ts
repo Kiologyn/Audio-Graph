@@ -22,9 +22,9 @@ import {
   type DeviceSlotName,
 } from "./types";
 
-/** Открытый на холсте граф */
+/** The graph open on the canvas */
 type GraphState = {
-  /** null, пока граф не загружен */
+  /** null until the graph is loaded */
   meta: { id: string; name: string; createdAt: number; showVolume: boolean } | null;
   viewport: Viewport | null;
   nodes: AudioNode[];
@@ -49,17 +49,17 @@ type GraphState = {
   redo: () => void;
 };
 
-/** Состояние графа до правки, для отмены */
+/** The graph state before an edit, for undo */
 type Snapshot = { nodes: AudioNode[]; edges: AudioEdge[] };
 
 const HISTORY_LIMIT = 100;
 
-// История живёт вне состояния: её изменения не должны перерисовывать холст.
-// Хранилище меняет ноды и связи только заменой массивов, поэтому снимок — это просто ссылки
+// History lives outside the state: its changes must not re-render the canvas.
+// The store changes nodes and edges only by replacing arrays, so a snapshot is just references
 let past: Snapshot[] = [];
 let future: Snapshot[] = [];
-// последняя запись: серия однотипных правок подряд (ползунок, удаление ноды вместе со связями)
-// отменяется одним шагом
+// the last entry: a series of similar edits in a row (a slider, deleting a node with its edges)
+// is undone in one step
 let lastKey: string | null = null;
 let lastAt = 0;
 let dragging = false;
@@ -91,46 +91,46 @@ function makeEdge(source: AudioNode, target: AudioNode): AudioEdge {
 }
 
 /**
- * Графы первого запуска. Кабели и устройства в них не выбраны: на каждом ПК они свои
+ * First-start graphs. Cables and devices in them aren't chosen: every PC has its own
  */
 export function starterGraphs(): { name: string; nodes: AudioNode[]; edges: AudioEdge[] }[] {
-  // всё, что играет по умолчанию, — в кабель, а из него в два устройства вывода
+  // everything playing to the default goes into a cable, and from it to two output devices
   const system = makeNode("system", { x: 0, y: 100 });
   const cable = makeNode("cable", { x: 320, y: 100 });
-  const out1 = makeNode("output", { x: 640, y: 0 }, t("Наушники"));
-  const out2 = makeNode("output", { x: 640, y: 200 }, t("Колонки"));
+  const out1 = makeNode("output", { x: 640, y: 0 }, t("label_headphones"));
+  const out2 = makeNode("output", { x: 640, y: 200 }, t("label_speakers"));
 
-  // звук приложения через кабель в наушники, и он же вместе с микрофоном — в кабель для звонков
+  // an app's sound goes through a cable to the headphones and, with the microphone, into a cable for calls
   const app = makeNode("app", { x: 0, y: 0 });
   const appCable = makeNode("cable", { x: 370, y: 58 });
-  const mic = makeNode("input", { x: 82, y: 330 }, t("Микрофон"));
-  const phones = makeNode("output", { x: 928, y: 60 }, t("Наушники"));
-  const mixed = makeNode("cable", { x: 697, y: 284 }, t("Микрофон с браузером"));
+  const mic = makeNode("input", { x: 82, y: 330 }, t("label_microphone"));
+  const phones = makeNode("output", { x: 928, y: 60 }, t("label_headphones"));
+  const mixed = makeNode("cable", { x: 697, y: 284 }, t("example_microphone_with_browser"));
   mic.data.source = { type: "default" };
   phones.data.sink = { type: "default" };
 
   return [
     {
-      name: t("Система в кабель"),
+      name: t("example_system_to_cable"),
       nodes: [system, cable, out1, out2],
       edges: [makeEdge(system, cable), makeEdge(cable, out1), makeEdge(cable, out2)],
     },
     {
-      name: t("Микрофон с приложением"),
+      name: t("example_microphone_with_app"),
       nodes: [app, appCable, mic, phones, mixed],
       edges: [makeEdge(app, appCable), makeEdge(appCable, phones), makeEdge(appCable, mixed), makeEdge(mic, mixed)],
     },
   ];
 }
 
-// В разработке правка хранилища через HMR пересоздала бы его пустым без повторной загрузки,
-// поэтому для модулей-хранилищ Vite перезагружает страницу целиком
+// In development an HMR edit of a store would recreate it empty without reloading,
+// so for store modules Vite reloads the whole page
 import.meta.hot?.accept(() => location.reload());
 
 export const useGraph = create<GraphState>()((set, get) => {
   /**
-   * Запомнить граф перед правкой. key склеивает серию правок в один шаг отмены,
-   * если между ними прошло меньше window мс
+   * Remember the graph before an edit. key merges a series of edits into one undo step
+   * if less than window ms passed between them
    */
   const record = (key: string | null = null, window = 1000) => {
     const now = Date.now();
@@ -144,8 +144,8 @@ export const useGraph = create<GraphState>()((set, get) => {
     future = [];
   };
 
-  // отменённое состояние возвращается без выделения: иначе Delete сразу после отмены
-  // удалил бы то, что было выделено когда-то давно
+  // an undone state comes back without selection: otherwise Delete right after undo
+  // would delete what was selected long ago
   const restore = (snap: Snapshot) => {
     lastKey = null;
     dragging = false;
@@ -186,7 +186,7 @@ export const useGraph = create<GraphState>()((set, get) => {
     setViewport: (viewport) => set({ viewport }),
 
     onNodesChange: (changes) => {
-      // выделение и размеры — не правки графа; перетаскивание — один шаг от начала до конца
+      // selection and sizes are not graph edits; a drag is one step from start to end
       if (changes.some((c) => c.type === "remove" || c.type === "add" || c.type === "replace")) record("delete", 50);
       for (const c of changes) {
         if (c.type !== "position") continue;
@@ -194,13 +194,13 @@ export const useGraph = create<GraphState>()((set, get) => {
           if (!dragging) record();
           dragging = true;
         } else if (dragging) dragging = false;
-        // сдвиг стрелками клавиатуры
+        // moving with the arrow keys
         else if (c.position) record("nudge");
       }
       set({ nodes: applyNodeChanges(changes, get().nodes) });
     },
     onEdgesChange: (changes) => {
-      // связи ноды удаляются отдельным вызовом сразу после неё самой — это тот же шаг
+      // a node's edges are deleted in a separate call right after the node: the same step
       if (changes.some((c) => c.type === "remove" || c.type === "add" || c.type === "replace")) record("delete", 50);
       set({ edges: applyEdgeChanges(changes, get().edges) });
     },
@@ -210,8 +210,8 @@ export const useGraph = create<GraphState>()((set, get) => {
       record();
       set({ edges });
     },
-    // холст отдаёт связь в том виде, в каком показывал её, с красной пометкой проблемы;
-    // новая связь создаётся копией старой, и пометка в хранилище не нужна
+    // the canvas returns an edge the way it showed it, with the red problem mark;
+    // the new edge is a copy of the old one, and the store doesn't need the mark
     onReconnect: (oldEdge, connection) => {
       const { className: _, ...edge } = oldEdge;
       record();
@@ -254,7 +254,7 @@ export const useGraph = create<GraphState>()((set, get) => {
       set({
         nodes: get().nodes.map((n) => {
           if (n.id !== id) return n;
-          // подпись, которую не меняли вручную (на любом из языков), следует за выбранным приложением
+          // a label not changed by hand (in any of the languages) follows the chosen app
           const auto = isAnyTranslation(n.data.label, NODE_KINDS.app.defaultLabel) || n.data.label === n.data.app?.name;
           const label = auto ? (app?.name ?? t(NODE_KINDS.app.defaultLabel)) : n.data.label;
           return { ...n, data: { ...n.data, app, label } };

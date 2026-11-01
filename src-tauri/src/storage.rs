@@ -1,4 +1,4 @@
-//! Общие помощники для файлов приложения (графы, кабели, настройки).
+//! Shared helpers for the app's files (graphs, cables, settings).
 
 use std::fs;
 use std::io;
@@ -18,27 +18,27 @@ pub fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// Запись через временный файл: при сбое посреди записи старый файл остаётся целым
+/// Writes through a temporary file: if writing fails midway, the old file stays intact
 pub fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
     let tmp = path.with_extension("json.tmp");
     fs::write(&tmp, data)?;
     fs::rename(&tmp, path)
 }
 
-/// id попадает в имена файлов, поэтому пропускаем только безопасные символы
+/// ids go into file names, so only safe characters pass
 pub fn check_id(id: &str) -> CmdResult<()> {
     let ok = !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-');
     if ok {
         Ok(())
     } else {
-        Err(tr!("недопустимый id: {id}", id = id))
+        Err(tr!("error_invalid_id", id = id))
     }
 }
 
 pub fn clean_name(name: &str) -> CmdResult<String> {
     let name = name.trim();
     if name.is_empty() {
-        Err(tr!("имя не может быть пустым"))
+        Err(tr!("error_empty_name"))
     } else {
         Ok(name.chars().take(100).collect())
     }
