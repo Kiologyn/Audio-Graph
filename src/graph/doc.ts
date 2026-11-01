@@ -13,7 +13,14 @@ export type GraphDoc = {
   edges: DocEdge[];
   /** Volume sliders on nodes */
   showVolume: boolean;
+  /** Delay sliders on output nodes; while off, the graph's delays aren't applied */
+  showDelay: boolean;
+  /** The delay sliders' range: from minus this many seconds to plus */
+  delayLimit: number;
 };
+
+/** The widest delay slider range, matches MAX_DELAY_LIMIT in graphs.rs */
+export const MAX_DELAY_LIMIT = 1;
 
 export type DocNode = {
   id: string;
@@ -24,12 +31,17 @@ export type DocNode = {
   cable: string | null;
   app: AppRef | null;
   volume: number;
+  /** Output delay in seconds; the engine gets it with autosave */
+  delay: number;
   position: { x: number; y: number };
 };
 
 export type DocEdge = { id: string; source: string; target: string };
 
-export type GraphMeta = Pick<GraphDoc, "id" | "name" | "createdAt" | "updatedAt" | "showVolume">;
+export type GraphMeta = Pick<GraphDoc, "id" | "name" | "createdAt" | "updatedAt" | "showVolume" | "showDelay" | "delayLimit">;
+
+/** What the graph's options menu changes */
+export type GraphSliders = Pick<GraphDoc, "showVolume" | "showDelay" | "delayLimit">;
 
 export function nodesToDoc(nodes: AudioNode[]): DocNode[] {
   return nodes.map((n) => {
@@ -45,6 +57,7 @@ export function nodesToDoc(nodes: AudioNode[]): DocNode[] {
       cable: meta.pickCable ? (n.data.cable ?? null) : null,
       app: meta.pickApp ? (n.data.app ?? null) : null,
       volume: meta.maxVolume ? (n.data.volume ?? 1) : 1,
+      delay: meta.delay ? (n.data.delay ?? 0) : 0,
       position: { x: n.position.x, y: n.position.y },
     };
   });
@@ -67,6 +80,7 @@ export function nodesFromDoc(nodes: DocNode[]): AudioNode[] {
       cable: n.cable ?? null,
       app: n.app ?? null,
       volume: n.volume ?? 1,
+      delay: n.delay ?? 0,
     },
   }));
 }

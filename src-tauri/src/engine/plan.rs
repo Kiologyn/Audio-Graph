@@ -53,6 +53,9 @@ pub struct Source {
     pub device: String,
     /// The product of node volumes along the path: input or cable, internal cables, output
     pub gain: f32,
+    /// How much later the sound is played, in seconds. After compile it is the output node's
+    /// delay as set; apply_delays turns it into what the engine plays (never negative)
+    pub delay: f32,
 }
 
 /// An engine stream: sound of recording devices is mixed and played into an output device
@@ -60,6 +63,9 @@ pub struct Source {
 pub struct Stream {
     pub sink: String,
     pub sources: Vec<Source>,
+    /// The device is an output node's: output delays apply to it. Sound into a cable isn't
+    /// delayed, otherwise the delay would reach every output behind the cable
+    pub output: bool,
 }
 
 /// The system default devices the "System" node sets
@@ -78,6 +84,9 @@ pub struct Plan {
     pub issues: Vec<Issue>,
     /// Virtual cable devices to create (Linux)
     pub virtual_cables: Vec<VirtualCable>,
+    /// Output nodes with a delay that an app or "System" plays into directly: the system
+    /// plays that sound, the engine can't delay it. apply_delays makes them issues when delays are on
+    pub undelayed: Vec<Issue>,
 }
 
 /// A cable the graph creates itself: an output device (the cable's input) and an input device (its output)
@@ -92,6 +101,9 @@ pub struct VirtualCable {
 
 /// The prefix of virtual device names: it tells them apart from the system's devices
 pub const VIRTUAL_PREFIX: &str = "audiograph.";
+
+/// The most a link delays sound, in seconds: PipeWire loopbacks don't hold more than about 2 s
+pub const MAX_DELAY: f32 = 2.0;
 
 /// A stream source "loopback:<output device>" is the sound played into that output device
 /// (WASAPI loopback). It stands in for the output of a cable that has only its input chosen
@@ -435,6 +447,7 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
     let mut routes = Vec::new();
     let mut system: Option<SystemRoute> = None;
     let mut seen_apps: HashMap<String, &str> = HashMap::new();
+    let mut undelayed = Vec::new();
     let ordered = graph
         .nodes
         .iter()
@@ -454,7 +467,18 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
 
         let render = match outgoing.as_slice() {
             [] => None,
-            [edge] => c.app_render(edge, c.nodes[edge.target.as_str()]),
+            [edge] => {
+                let target = c.nodes[edge.target.as_str()];
+                let render = c.app_render(edge, target);
+                if render.is_some() && target.kind == NodeKind::Output && target.delay != 0.0 {
+                    undelayed.push(Issue {
+                        nodes: vec![target.id.clone(), node.id.clone()],
+                        edges: vec![edge.id.clone()],
+                        message: tr!("issue_delay_direct"),
+                    });
+                }
+                render
+            }
             many => {
                 let ids: Vec<&str> = many.iter().map(|e| e.id.as_str()).collect();
                 c.issue(
@@ -558,7 +582,9 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
         .copied()
         .filter(|e| !is_routed(&c, &e.source) && !is_routed(&c, &e.target))
         .collect();
-    let mut streams: BTreeMap<String, BTreeMap<String, f32>> = BTreeMap::new();
+    // device → (path volume, delay) per output device
+    let mut streams: BTreeMap<String, BTreeMap<String, (f32, f32)>> = BTreeMap::new();
+    let mut outputs = BTreeSet::new();
     for node in &graph.nodes {
         let is_sink = matches!(c.role(node), Role::Output(_) | Role::Cable(_) | Role::Deleted);
         if !is_sink || !engine_edges.iter().any(|e| e.target == node.id) {
@@ -566,6 +592,8 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
         }
         // a cable's volume applies to the sound taken from it, so a receiving cable doesn't multiply it in
         let sink_volume = if matches!(c.role(node), Role::Output(_)) { node.volume } else { 1.0 };
+        // only an output node delays: a cable passes its sound on at once
+        let delay = if matches!(c.role(node), Role::Output(_)) { node.delay } else { 0.0 };
         let mut sources = BTreeMap::new();
         c.collect_sources(node, &engine_edges, &mut HashSet::new(), sink_volume, &mut sources);
         let Some(sink) = c.sink_device(node) else { continue };
@@ -586,26 +614,66 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
                 c.issue(&[&node.id], &into, message);
             }
         }
+        if matches!(c.role(node), Role::Output(_)) {
+            outputs.insert(sink.clone());
+        }
         let merged = streams.entry(sink).or_default();
         for (device, gain) in sources {
-            let g = merged.entry(device).or_insert(gain);
-            *g = g.max(gain);
+            mix_in(merged, device, gain, delay);
         }
     }
 
     Plan {
         routes,
         system,
-        streams: streams
-            .into_iter()
-            .filter(|(_, sources)| !sources.is_empty())
-            .map(|(sink, sources)| Stream {
-                sink,
-                sources: sources.into_iter().map(|(device, gain)| Source { device, gain }).collect(),
-            })
-            .collect(),
+        streams: into_streams(streams, &outputs),
         issues: c.issues,
         virtual_cables: Vec::new(),
+        undelayed,
+    }
+}
+
+/// Adds a source to an output device's sources. The same device on several paths sounds once:
+/// the loudest path counts, and the longest delay (nodes of one device delayed differently)
+fn mix_in(sources: &mut BTreeMap<String, (f32, f32)>, device: String, gain: f32, delay: f32) {
+    let (g, d) = sources.entry(device).or_insert((gain, delay));
+    *g = g.max(gain);
+    *d = d.max(delay);
+}
+
+fn into_streams(streams: BTreeMap<String, BTreeMap<String, (f32, f32)>>, outputs: &BTreeSet<String>) -> Vec<Stream> {
+    streams
+        .into_iter()
+        .filter(|(_, sources)| !sources.is_empty())
+        .map(|(sink, sources)| Stream {
+            output: outputs.contains(&sink),
+            sources: sources.into_iter().map(|(device, (gain, delay))| Source { device, gain, delay }).collect(),
+            sink,
+        })
+        .collect()
+}
+
+/// Output delays as the engine plays them. limits, one per plan: the slider range if the graph has
+/// delays turned on; None: off, its outputs aren't delayed. A delay is relative to the other outputs:
+/// minus means earlier, and since sound can't play earlier, all the other outputs of running graphs
+/// are delayed by as much instead. The first running plans go to the engine, the rest only show issues
+pub fn apply_delays(plans: &mut [Plan], running: usize, limits: &[Option<f32>]) {
+    for (plan, limit) in plans.iter_mut().zip(limits) {
+        let undelayed = std::mem::take(&mut plan.undelayed);
+        let Some(limit) = *limit else {
+            plan.streams.iter_mut().flat_map(|s| &mut s.sources).for_each(|s| s.delay = 0.0);
+            continue;
+        };
+        plan.streams.iter_mut().flat_map(|s| &mut s.sources).for_each(|s| s.delay = s.delay.clamp(-limit, limit));
+        plan.issues.extend(undelayed);
+    }
+    let count = running.min(plans.len());
+    let outputs = || plans[..count].iter().flat_map(|p| &p.streams).filter(|s| s.output);
+    let earliest = outputs().flat_map(|s| &s.sources).map(|s| s.delay).fold(0.0, f32::min);
+    for stream in plans[..count].iter_mut().flat_map(|p| &mut p.streams).filter(|s| s.output) {
+        for source in &mut stream.sources {
+            source.delay = (source.delay - earliest).min(MAX_DELAY);
+        }
     }
 }
 
@@ -719,26 +787,25 @@ fn reaches(links: &HashMap<String, BTreeSet<String>>, from: &str, to: &str) -> b
 
 /// One plan for the engine from the plans of running graphs (after compile_all)
 pub fn merge(plans: &[Plan]) -> Plan {
-    let mut streams: BTreeMap<String, BTreeMap<String, f32>> = BTreeMap::new();
+    let mut streams: BTreeMap<String, BTreeMap<String, (f32, f32)>> = BTreeMap::new();
+    let mut outputs = BTreeSet::new();
     for stream in plans.iter().flat_map(|p| &p.streams) {
+        if stream.output {
+            outputs.insert(stream.sink.clone());
+        }
         let merged = streams.entry(stream.sink.clone()).or_default();
         for s in &stream.sources {
-            let g = merged.entry(s.device.clone()).or_insert(s.gain);
-            *g = g.max(s.gain);
+            mix_in(merged, s.device.clone(), s.gain, s.delay);
         }
     }
     Plan {
         routes: plans.iter().flat_map(|p| p.routes.iter().cloned()).collect(),
         system: plans.iter().find_map(|p| p.system.clone()),
-        streams: streams
-            .into_iter()
-            .map(|(sink, sources)| Stream {
-                sink,
-                sources: sources.into_iter().map(|(device, gain)| Source { device, gain }).collect(),
-            })
-            .collect(),
+        streams: into_streams(streams, &outputs),
         issues: plans.iter().flat_map(|p| p.issues.iter().cloned()).collect(),
         virtual_cables: plans.iter().flat_map(|p| p.virtual_cables.iter().cloned()).collect(),
+        // apply_delays has already made them issues
+        undelayed: Vec::new(),
     }
 }
 
@@ -764,6 +831,7 @@ mod tests {
             cable: None,
             app: None,
             volume: 1.0,
+            delay: 0.0,
             position: Position { x: 0.0, y: 0.0 },
         }
     }
@@ -816,6 +884,8 @@ mod tests {
                 })
                 .collect(),
             show_volume: true,
+            show_delay: false,
+            delay_limit: 0.5,
         }
     }
     fn defaults() -> Defaults {
@@ -824,14 +894,17 @@ mod tests {
             capture: Some("mic".into()),
         }
     }
+    /// In these tests cable inputs end with ".in" or are virtual devices, the rest are output nodes' devices
     fn stream(sink: &str, sources: &[&str]) -> Stream {
         Stream {
+            output: !sink.ends_with(".in") && !sink.starts_with(VIRTUAL_PREFIX),
             sink: sink.into(),
             sources: sources
                 .iter()
                 .map(|s| Source {
                     device: s.to_string(),
                     gain: 1.0,
+                    delay: 0.0,
                 })
                 .collect(),
         }
@@ -1114,6 +1187,73 @@ mod tests {
         assert_eq!(route("player").render, Some(Target::Device(sink.clone())));
         assert_eq!(route("call").capture, Some(Target::Device(source.clone())));
         assert_eq!(plan.streams, vec![stream("audiograph.mix", &["mic"]), stream("hp", &["audiograph.mix.out"])]);
+    }
+
+    fn delayed(node: GraphNode, delay: f32) -> GraphNode {
+        GraphNode { delay, ..node }
+    }
+
+    /// The delay of each output device's first source, after apply_delays
+    fn delays(plan: &Plan) -> Vec<(&str, f32)> {
+        plan.streams.iter().map(|s| (s.sink.as_str(), (s.sources[0].delay * 1000.0).round() / 1000.0)).collect()
+    }
+
+    #[test]
+    fn output_delays_are_relative() {
+        // the microphone into the headphones a bit later and into the speakers earlier than the rest
+        let g = graph(
+            vec![input("mic", dev("mic")), delayed(output("hp", dev("hp")), 0.1), delayed(output("spk", dev("spk")), -0.2)],
+            &[("mic", "hp"), ("mic", "spk")],
+        );
+        let compiled = compile_all(&[&g], &[], &defaults());
+        // sound can't play earlier: the speakers get none, the headphones 0.2 + 0.1
+        let mut plans = compiled.clone();
+        apply_delays(&mut plans, 1, &[Some(0.5)]);
+        assert_eq!(delays(&plans[0]), vec![("hp", 0.3), ("spk", 0.0)]);
+        // the range cuts what is beyond it
+        let mut plans = compiled.clone();
+        apply_delays(&mut plans, 1, &[Some(0.15)]);
+        assert_eq!(delays(&plans[0]), vec![("hp", 0.25), ("spk", 0.0)]);
+        // delays turned off: nothing is delayed
+        let mut plans = compiled;
+        apply_delays(&mut plans, 1, &[None]);
+        assert_eq!(delays(&plans[0]), vec![("hp", 0.0), ("spk", 0.0)]);
+    }
+
+    #[test]
+    fn delays_dont_go_into_cables() {
+        // the microphone through a cable to the only output, set earlier: there is nothing to be earlier
+        // than, and the link into the cable isn't delayed either, or the output would be late after all
+        let g = graph(
+            vec![input("mic", dev("mic")), cable_node("c", Some("c")), delayed(output("hp", dev("hp")), -0.4)],
+            &[("mic", "c"), ("c", "hp")],
+        );
+        let mut plans = compile_all(&[&g], &[cable("c", "c.in", "c.out")], &defaults());
+        apply_delays(&mut plans, 1, &[Some(0.5)]);
+        assert_eq!(delays(&plans[0]), vec![("c.in", 0.0), ("hp", 0.0)]);
+    }
+
+    #[test]
+    fn only_running_graphs_shift_each_other() {
+        let running = named(graph(vec![input("mic", dev("mic")), output("hp", dev("hp"))], &[("mic", "hp")]), "a");
+        let stopped = named(graph(vec![input("mic", dev("mic")), delayed(output("spk", dev("spk")), -0.3)], &[("mic", "spk")]), "b");
+        let mut plans = compile_all(&[&running, &stopped], &[], &defaults());
+        apply_delays(&mut plans, 1, &[Some(0.5)]);
+        assert_eq!(delays(&plans[0]), vec![("hp", 0.0)]);
+    }
+
+    #[test]
+    fn app_straight_into_delayed_output() {
+        // the system plays the app's sound, the engine can't hold it back
+        let g = graph(vec![app("a", "a.exe"), delayed(output("hp", dev("hp")), 0.2)], &[("a", "hp")]);
+        let mut plans = compile_all(&[&g], &[], &defaults());
+        apply_delays(&mut plans, 1, &[Some(0.5)]);
+        assert_eq!(plans[0].issues.len(), 1, "{:?}", plans[0].issues);
+        assert_eq!(plans[0].issues[0].nodes, vec!["hp", "a"]);
+        // with delays off there is nothing to warn about
+        let mut plans = compile_all(&[&g], &[], &defaults());
+        apply_delays(&mut plans, 1, &[None]);
+        assert!(plans[0].issues.is_empty());
     }
 
     #[test]

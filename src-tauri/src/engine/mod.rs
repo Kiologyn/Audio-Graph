@@ -337,6 +337,10 @@ fn supervise(
         } else {
             plan::compile_all(&checked, &cables, &defaults)
         };
+        let mut plans = plans;
+        // delays only in graphs that have them turned on
+        let limits: Vec<Option<f32>> = checked.iter().map(|g| g.delay_limit()).collect();
+        plan::apply_delays(&mut plans, running.len(), &limits);
         // while nothing runs the plan is empty: streams close, apps get their devices back
         let (streams, apps) = backend.apply(&plan::merge(&plans[..running.len()]));
         let shown = opened.as_ref().or(running.first());

@@ -40,6 +40,8 @@ export type AudioNodeData = {
   app: AppRef | null;
   /** Volume: 1 is unchanged, 0 is silence, above 1 is gain */
   volume: number;
+  /** An output's delay in seconds relative to the other outputs: plus plays later, minus earlier */
+  delay: number;
 };
 
 export type AudioNode = Node<AudioNodeData, "audio">;
@@ -71,6 +73,8 @@ type KindMeta = {
    * is its volume in the system mixer, at most 100%. Without this field the node has no
    */
   maxVolume?: number;
+  /** The node has a delay slider (when the graph's delay sliders are on) */
+  delay?: boolean;
 };
 
 export const NODE_KINDS: Record<AudioNodeKind, KindMeta> = {
@@ -89,6 +93,7 @@ export const NODE_KINDS: Record<AudioNodeKind, KindMeta> = {
     hasOutput: false,
     sink: { placeholder: "placeholder_no_device", allowDefault: true },
     maxVolume: 2,
+    delay: true,
   },
   app: {
     title: "node_app",

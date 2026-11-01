@@ -11,7 +11,7 @@ import {
 } from "@xyflow/react";
 import { create } from "zustand";
 import { isAnyTranslation, t } from "../i18n";
-import { edgesFromDoc, nodesFromDoc, type GraphDoc } from "./doc";
+import { edgesFromDoc, nodesFromDoc, type GraphDoc, type GraphSliders } from "./doc";
 import {
   NODE_KINDS,
   type AudioEdge,
@@ -25,14 +25,14 @@ import {
 /** The graph open on the canvas */
 type GraphState = {
   /** null until the graph is loaded */
-  meta: { id: string; name: string; createdAt: number; showVolume: boolean } | null;
+  meta: ({ id: string; name: string; createdAt: number } & GraphSliders) | null;
   viewport: Viewport | null;
   nodes: AudioNode[];
   edges: AudioEdge[];
   loadDoc: (doc: GraphDoc) => void;
   unload: () => void;
   setName: (name: string) => void;
-  setShowVolume: (show: boolean) => void;
+  setSliders: (patch: Partial<GraphSliders>) => void;
   setViewport: (viewport: Viewport) => void;
   onNodesChange: (changes: NodeChange<AudioNode>[]) => void;
   onEdgesChange: (changes: EdgeChange<AudioEdge>[]) => void;
@@ -45,6 +45,7 @@ type GraphState = {
   setCable: (id: string, cable: string | null) => void;
   setApp: (id: string, app: AppRef | null) => void;
   setVolume: (id: string, volume: number) => void;
+  setDelay: (id: string, delay: number) => void;
   undo: () => void;
   redo: () => void;
 };
@@ -76,7 +77,7 @@ function makeNode(kind: AudioNodeKind, position: XYPosition, label?: string): Au
     id: crypto.randomUUID(),
     type: "audio",
     position,
-    data: { kind, label: label ?? t(NODE_KINDS[kind].defaultLabel), sink: null, source: null, cable: null, app: null, volume: 1 },
+    data: { kind, label: label ?? t(NODE_KINDS[kind].defaultLabel), sink: null, source: null, cable: null, app: null, volume: 1, delay: 0 },
   };
 }
 
@@ -164,7 +165,14 @@ export const useGraph = create<GraphState>()((set, get) => {
     loadDoc: (doc) => {
       resetHistory();
       set({
-        meta: { id: doc.id, name: doc.name, createdAt: doc.createdAt, showVolume: doc.showVolume ?? true },
+        meta: {
+          id: doc.id,
+          name: doc.name,
+          createdAt: doc.createdAt,
+          showVolume: doc.showVolume ?? true,
+          showDelay: doc.showDelay ?? false,
+          delayLimit: doc.delayLimit ?? 0.5,
+        },
         viewport: doc.viewport,
         nodes: nodesFromDoc(doc.nodes),
         edges: edgesFromDoc(doc.edges),
@@ -179,9 +187,9 @@ export const useGraph = create<GraphState>()((set, get) => {
       const meta = get().meta;
       if (meta) set({ meta: { ...meta, name } });
     },
-    setShowVolume: (showVolume) => {
+    setSliders: (patch) => {
       const meta = get().meta;
-      if (meta) set({ meta: { ...meta, showVolume } });
+      if (meta) set({ meta: { ...meta, ...patch } });
     },
     setViewport: (viewport) => set({ viewport }),
 
@@ -266,6 +274,13 @@ export const useGraph = create<GraphState>()((set, get) => {
       record(`volume:${id}`);
       set({
         nodes: get().nodes.map((n) => (n.id === id ? { ...n, data: { ...n.data, volume } } : n)),
+      });
+    },
+
+    setDelay: (id, delay) => {
+      record(`delay:${id}`);
+      set({
+        nodes: get().nodes.map((n) => (n.id === id ? { ...n, data: { ...n.data, delay } } : n)),
       });
     },
 

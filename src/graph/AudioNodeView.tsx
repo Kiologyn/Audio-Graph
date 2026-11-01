@@ -2,6 +2,7 @@ import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { memo, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useT } from "../i18n";
 import { dynamicCables, virtualDeviceName } from "../platform";
+import { useSettings } from "../settings";
 import { AppPicker } from "./AppPicker";
 import { CablePicker } from "./CablePicker";
 import { useCables } from "./cables";
@@ -86,6 +87,49 @@ function VolumeSlider({ id, value, max }: { id: string; value: number; max: numb
   );
 }
 
+/**
+ * An output's delay: from minus the range to plus, no delay in the middle. The engine gets it
+ * with autosave: a delay change restarts the sound for a moment anyway, so there is no live sending.
+ * Double-clicking the value resets it
+ */
+function DelaySlider({ id, value, limit }: { id: string; value: number; limit: number }) {
+  const setDelay = useGraph((s) => s.setDelay);
+  const language = useSettings((s) => s.language);
+  const t = useT();
+  // a delay beyond a narrowed range acts as the range's edge, in the engine too
+  const shown = Math.min(limit, Math.max(-limit, value));
+  const seconds = (v: number, digits: number) =>
+    t("delay_seconds", {
+      value: new Intl.NumberFormat(language, {
+        minimumFractionDigits: digits,
+        maximumFractionDigits: 3,
+        signDisplay: "exceptZero",
+      }).format(v),
+    });
+  // where the knob is, 0..1: the fill goes from the middle to it, the value is written under it
+  const at = 0.5 + shown / limit / 2;
+  return (
+    <div className="ag-delay nodrag" title={t("delay_hint")}>
+      <span className="ag-delay__edge">{seconds(-limit, 0)}</span>
+      <div className="ag-delay__slider" style={{ "--at": at } as CSSProperties}>
+        <input
+          type="range"
+          min={-limit * 1000}
+          max={limit * 1000}
+          step={1}
+          value={Math.round(shown * 1000)}
+          style={{ "--from": `${Math.min(at, 0.5) * 100}%`, "--to": `${Math.max(at, 0.5) * 100}%` } as CSSProperties}
+          onChange={(e) => setDelay(id, Number(e.currentTarget.value) / 1000)}
+        />
+        <span className={`ag-delay__value${shown !== 0 ? " is-set" : ""}`} onDoubleClick={() => setDelay(id, 0)}>
+          {seconds(shown, 3)}
+        </span>
+      </div>
+      <span className="ag-delay__edge">{seconds(limit, 0)}</span>
+    </div>
+  );
+}
+
 function AudioNodeView({ id, data, selected }: NodeProps<AudioNode>) {
   const meta = NODE_KINDS[data.kind];
   const renameNode = useGraph((s) => s.renameNode);
@@ -98,6 +142,8 @@ function AudioNodeView({ id, data, selected }: NodeProps<AudioNode>) {
   const cables = useCables((s) => s.cables);
   const devices = useDevices((s) => s.devices);
   const showVolume = useGraph((s) => s.meta?.showVolume ?? true);
+  const showDelay = useGraph((s) => s.meta?.showDelay ?? false);
+  const delayLimit = useGraph((s) => s.meta?.delayLimit ?? 0.5);
   const t = useT();
   // t in the dependencies: note texts are translated when the language changes
   const { notes, flagged } = useMemo(
@@ -183,6 +229,8 @@ function AudioNodeView({ id, data, selected }: NodeProps<AudioNode>) {
       {meta.showDefaults && <SystemDefaults />}
 
       {showVolume && meta.maxVolume && <VolumeSlider id={id} value={data.volume ?? 1} max={meta.maxVolume} />}
+
+      {showDelay && meta.delay && <DelaySlider id={id} value={data.delay ?? 0} limit={delayLimit} />}
 
       {notes.length > 0 && (
         <div className="ag-node__notes">

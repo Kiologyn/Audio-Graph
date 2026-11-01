@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { t } from "../i18n";
 import { useSettings } from "../settings";
 import { graphsApi } from "./api";
-import { edgesToDoc, nodesToDoc, type GraphDoc, type GraphMeta } from "./doc";
+import { edgesToDoc, nodesToDoc, type GraphDoc, type GraphMeta, type GraphSliders } from "./doc";
 import { uniqueName } from "./names";
 import { starterGraphs, useGraph } from "./store";
 import type { AudioEdge, AudioNode } from "./types";
@@ -19,7 +19,8 @@ type LibraryState = {
   open: (id: string) => Promise<void>;
   create: () => Promise<string>;
   rename: (id: string, name: string) => Promise<void>;
-  setShowVolume: (id: string, show: boolean) => Promise<void>;
+  /** The graph's volume and delay sliders and the delay range */
+  setSliders: (id: string, patch: Partial<GraphSliders>) => Promise<void>;
   remove: (id: string) => Promise<void>;
   /** Puts the list in this order of graph ids */
   reorder: (ids: string[]) => Promise<void>;
@@ -43,13 +44,17 @@ function snapshot(): GraphDoc | null {
     nodes: nodesToDoc(nodes),
     edges: edgesToDoc(edges),
     showVolume: meta.showVolume,
+    showDelay: meta.showDelay,
+    delayLimit: meta.delayLimit,
   };
 }
 
 // Content key: selection, node sizes and other transient state are not part of it,
 // so their changes don't trigger a save
 const contentKey = (doc: GraphDoc | null) =>
-  doc ? JSON.stringify([doc.id, doc.name, doc.viewport, doc.nodes, doc.edges, doc.showVolume]) : "";
+  doc
+    ? JSON.stringify([doc.id, doc.name, doc.viewport, doc.nodes, doc.edges, doc.showVolume, doc.showDelay, doc.delayLimit])
+    : "";
 
 let savedKey = "";
 let timer: ReturnType<typeof setTimeout> | undefined;
@@ -101,12 +106,14 @@ useGraph.subscribe((state, prev) => {
 
 // ---------- library ----------
 
-const metaOf = ({ id, name, createdAt, updatedAt, showVolume }: GraphDoc): GraphMeta => ({
+const metaOf = ({ id, name, createdAt, updatedAt, showVolume, showDelay, delayLimit }: GraphDoc): GraphMeta => ({
   id,
   name,
   createdAt,
   updatedAt,
   showVolume,
+  showDelay,
+  delayLimit,
 });
 
 /** A graph from the old autosave in localStorage (before files existed) */
@@ -129,11 +136,12 @@ let initOnce: Promise<void> | null = null;
 import.meta.hot?.accept(() => location.reload());
 
 export const useLibrary = create<LibraryState>()((set, get) => {
-  async function createFrom(name: string, nodes: AudioNode[], edges: AudioEdge[]): Promise<string> {
+  /** showDelay: delay sliders on (the ready-made graphs of a first start); other graphs start without them */
+  async function createFrom(name: string, nodes: AudioNode[], edges: AudioEdge[], showDelay = false): Promise<string> {
     await flushSave();
     // a new graph's volume checkbox is as set in the settings
     const showVolume = useSettings.getState().newGraphVolume;
-    const doc = await graphsApi.create(name, nodesToDoc(nodes), edgesToDoc(edges), showVolume);
+    const doc = await graphsApi.create(name, nodesToDoc(nodes), edgesToDoc(edges), showVolume, showDelay);
     set((s) => ({ graphs: [...s.graphs, metaOf(doc)] }));
     useGraph.getState().loadDoc(doc);
     markLoaded();
@@ -171,7 +179,8 @@ export const useLibrary = create<LibraryState>()((set, get) => {
           } else {
             // first start: ready-made graphs, the first one open
             const ids = [];
-            for (const g of starterGraphs()) ids.push(await createFrom(g.name, g.nodes, g.edges));
+            // a new user sees the delay sliders right away, with the default range of ±0.5 s
+            for (const g of starterGraphs()) ids.push(await createFrom(g.name, g.nodes, g.edges, true));
             await get().open(ids[0]);
           }
         } else {
@@ -208,12 +217,15 @@ export const useLibrary = create<LibraryState>()((set, get) => {
         else await graphsApi.rename(id, trimmed);
       }),
 
-    setShowVolume: (id, show) =>
+    setSliders: (id, patch) =>
       guard(async () => {
-        set((s) => ({ graphs: s.graphs.map((g) => (g.id === id ? { ...g, showVolume: show } : g)) }));
+        const graph = get().graphs.find((g) => g.id === id);
+        if (!graph) return;
+        const next = { ...graph, ...patch };
+        set((s) => ({ graphs: s.graphs.map((g) => (g.id === id ? next : g)) }));
         // autosave saves the open graph, the others go through a separate command
-        if (useGraph.getState().meta?.id === id) useGraph.getState().setShowVolume(show);
-        else await graphsApi.setShowVolume(id, show);
+        if (useGraph.getState().meta?.id === id) useGraph.getState().setSliders(patch);
+        else await graphsApi.setSliders(id, next);
       }),
 
     reorder: (ids) =>

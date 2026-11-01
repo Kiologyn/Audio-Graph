@@ -24,6 +24,10 @@ fn yes() -> bool {
     true
 }
 
+fn half_second() -> f32 {
+    0.5
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeKind {
@@ -90,6 +94,9 @@ pub struct GraphNode {
     /// Volume: 1 is unchanged, 0 is silence, above 1 is gain (engine streams only)
     #[serde(default = "full_volume")]
     pub volume: f32,
+    /// An output's delay in seconds relative to the other outputs: plus plays later, minus earlier
+    #[serde(default)]
+    pub delay: f32,
     pub position: Position,
 }
 
@@ -118,6 +125,23 @@ pub struct Graph {
     /// Volume sliders on this graph's nodes
     #[serde(default = "yes")]
     pub show_volume: bool,
+    /// Delay sliders on this graph's output nodes; while off, its delays aren't applied
+    #[serde(default)]
+    pub show_delay: bool,
+    /// The delay sliders' range: from minus this many seconds to plus
+    #[serde(default = "half_second")]
+    pub delay_limit: f32,
+}
+
+/// The widest delay slider range: delays relative to each other add up, so two of these must fit
+/// into what a link can delay (plan::MAX_DELAY)
+pub const MAX_DELAY_LIMIT: f32 = crate::engine::plan::MAX_DELAY / 2.0;
+
+impl Graph {
+    /// The delay slider range if the graph's delays are on, within what the engine can do
+    pub fn delay_limit(&self) -> Option<f32> {
+        self.show_delay.then(|| self.delay_limit.clamp(0.001, MAX_DELAY_LIMIT))
+    }
 }
 
 /// A short summary of a graph for the list
@@ -129,6 +153,8 @@ pub struct GraphMeta {
     pub created_at: u64,
     pub updated_at: u64,
     pub show_volume: bool,
+    pub show_delay: bool,
+    pub delay_limit: f32,
 }
 
 impl From<&Graph> for GraphMeta {
@@ -139,6 +165,8 @@ impl From<&Graph> for GraphMeta {
             created_at: g.created_at,
             updated_at: g.updated_at,
             show_volume: g.show_volume,
+            show_delay: g.show_delay,
+            delay_limit: g.delay_limit,
         }
     }
 }
@@ -270,6 +298,7 @@ pub fn graph_create(
     nodes: Vec<GraphNode>,
     edges: Vec<GraphEdge>,
     show_volume: Option<bool>,
+    show_delay: Option<bool>,
 ) -> CmdResult<Graph> {
     let _guard = store.lock.lock().map_err(err)?;
     let now = now_ms();
@@ -283,6 +312,8 @@ pub fn graph_create(
         nodes,
         edges,
         show_volume: show_volume.unwrap_or(true),
+        show_delay: show_delay.unwrap_or(false),
+        delay_limit: half_second(),
     };
     store.write(&graph)?;
     store.set_last_opened(Some(&graph.id))?;
@@ -317,12 +348,21 @@ pub fn graph_rename(store: State<GraphStore>, engine: State<Engine>, id: String,
     Ok(GraphMeta::from(&graph))
 }
 
-/// Volume sliders of a graph not open in the window (the open one is saved whole)
+/// Volume and delay sliders of a graph not open in the window (the open one is saved whole)
 #[tauri::command]
-pub fn graph_set_show_volume(store: State<GraphStore>, engine: State<Engine>, id: String, show: bool) -> CmdResult<GraphMeta> {
+pub fn graph_set_sliders(
+    store: State<GraphStore>,
+    engine: State<Engine>,
+    id: String,
+    volume: bool,
+    delay: bool,
+    delay_limit: f32,
+) -> CmdResult<GraphMeta> {
     let _guard = store.lock.lock().map_err(err)?;
     let mut graph = store.read(&id)?;
-    graph.show_volume = show;
+    graph.show_volume = volume;
+    graph.show_delay = delay;
+    graph.delay_limit = delay_limit.clamp(0.001, MAX_DELAY_LIMIT);
     graph.updated_at = now_ms();
     store.write(&graph)?;
     engine.saved(&graph);

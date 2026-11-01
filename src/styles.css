@@ -156,30 +156,84 @@ button {
 /* ---------- node volume and settings ---------- */
 
 /* volume checkbox in a graph row */
-.ag-graphs__volume {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 6px;
-  border-radius: 4px;
-  color: var(--ag-text-dim);
+/* the arrow of a graph's options menu: it turns over while the menu is open */
+.ag-graphs__options svg {
+  transition: transform 150ms ease;
+}
+
+.ag-graphs__options.is-open svg {
+  transform: rotate(180deg);
+}
+
+/* a graph's options menu: checkboxes like in the settings, the delay range on the right */
+.ag-graph-options {
+  display: grid;
+  gap: 12px;
+  width: 320px;
+  padding: 10px 12px;
+}
+
+.ag-graph-options__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.ag-graph-options__check {
+  display: flex;
+  flex: 1;
+  align-items: flex-start;
+  gap: 8px;
   cursor: pointer;
 }
 
-.ag-graphs__volume:hover {
-  background: var(--ag-hover);
-}
-
-.ag-graphs__volume input,
+.ag-graph-options__check input,
 .ag-settings__check input {
   margin: 0;
   accent-color: var(--ag-focus);
   cursor: pointer;
 }
 
-.ag-graphs__volume:has(input:checked) {
+.ag-graph-options__check input {
+  margin-top: 2px;
+}
+
+.ag-graph-options__check small {
+  display: block;
+  margin-top: 3px;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--ag-text-dim);
+}
+
+.ag-graph-options__seconds {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--ag-text-dim);
+}
+
+.ag-graph-options__seconds input {
+  width: 52px;
+  padding: 3px 6px;
+  border: 1px solid var(--ag-border);
+  border-radius: 5px;
+  background: var(--ag-surface-2);
   color: var(--ag-text);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.ag-graph-options__seconds input:focus {
+  outline: none;
+  border-color: var(--ag-focus);
+}
+
+.ag-graph-options__seconds.is-disabled {
+  opacity: 0.5;
 }
 
 .ag-header-btn--icon {
@@ -490,7 +544,8 @@ button {
 }
 
 .ag-panel__row:hover .ag-panel__action,
-.ag-panel__action:focus-visible {
+.ag-panel__action:focus-visible,
+.ag-panel__action.is-open {
   opacity: 1;
 }
 
@@ -535,7 +590,7 @@ button {
   padding-right: 4px;
 }
 
-/* a graph row also has the volume checkbox and start: the panel is wider so names fit */
+/* a graph row also has its options arrow and start: the panel is wider so names fit */
 .ag-graphs .ag-panel {
   width: 360px;
 }
@@ -953,7 +1008,8 @@ button {
   margin-top: 8px;
 }
 
-.ag-volume input {
+.ag-volume input,
+.ag-delay input {
   flex: 1;
   min-width: 0;
   height: 4px;
@@ -964,7 +1020,8 @@ button {
   cursor: pointer;
 }
 
-.ag-volume input::-webkit-slider-thumb {
+.ag-volume input::-webkit-slider-thumb,
+.ag-delay input::-webkit-slider-thumb {
   width: 12px;
   height: 12px;
   appearance: none;
@@ -985,6 +1042,61 @@ button {
 
 /* gain above 100% is done by the engine only, and it shows */
 .ag-volume__value.is-boost {
+  color: var(--accent);
+}
+
+/* an output's delay: no delay in the middle, the fill goes from it to the knob, the value is under the knob */
+.ag-delay {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.ag-delay__slider {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding-top: 4px;
+}
+
+.ag-delay__slider input {
+  display: block;
+  width: 100%;
+}
+
+.ag-delay__edge,
+.ag-delay__value {
+  font-size: 10.5px;
+  line-height: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ag-text-dim);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.ag-delay input {
+  background: linear-gradient(
+    to right,
+    var(--ag-surface-2) var(--from),
+    var(--accent) var(--from),
+    var(--accent) var(--to),
+    var(--ag-surface-2) var(--to)
+  );
+}
+
+/* under the knob's center: the 12 px knob moves within the track minus its width */
+.ag-delay__value {
+  position: absolute;
+  top: 16px;
+  left: calc(6px + (100% - 12px) * var(--at));
+  transform: translateX(-50%);
+  font-size: 11px;
+  cursor: default;
+}
+
+.ag-delay__value.is-set {
   color: var(--accent);
 }
 
