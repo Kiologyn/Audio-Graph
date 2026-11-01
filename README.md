@@ -11,8 +11,9 @@ The graph above sends Spotify to the headphones and, at the same time, mixes it 
 - **Five kinds of nodes.** Input (microphone), Output (headphones, speakers), App, Cable, and System (the system's default devices).
 - **Per-app routing.** An app plays into the device on the right of its node and hears the device on the left. On Windows this is the same setting as *Volume mixer → app output/input device*; on Linux it is the app's streams being moved, like in pavucontrol.
 - **Cables.** A cable mixes everything that goes into it and passes it on. On Windows a cable is either a mix point inside the app or a pair of devices of a virtual cable driver. On Linux every cable node is a virtual device that the graph creates while it runs and that other programs can use too.
+- **Finding cables (Windows).** *Find cables* in the **Cables** menu adds the device pairs of installed virtual cable drivers, recognized by the drivers' device properties. A cable whose input and output belong to different driver lines gets a warning. A cable with only its input chosen still works for devices: the app records what is played into the input.
 - **Volume on every node.** Devices and cables go from 0 to 200%; apps go up to 100% (their volume in the system mixer).
-- **Several graphs at once.** Run them from the graph list. A running dot shows which ones are active, and it turns red if something is wrong.
+- **Several graphs at once.** Run them from the graph list; drag graphs and cables by their handles to reorder the lists. A running dot shows which ones are active, and it turns red if something is wrong.
 - **Problems are shown in place.** Missing devices, loops, an app connected to two outputs, conflicts between running graphs: the node gets a red note, the arrow turns red, and the header lists everything.
 - **Everything is put back.** When a graph stops or the app quits, apps get their previous devices and volumes, and the system gets its previous default devices. If the app is killed, this happens on the next start.
 - **Tray.** Closing the window hides it to the tray; graphs keep running. Start, stop and quit from the tray menu. Starting the app again shows the hidden window.
@@ -24,7 +25,7 @@ The graph above sends Spotify to the headphones and, at the same time, mixes it 
 
 - Windows 11 or Windows 10 version 1803 or later (developed on Windows 11).
 - [WebView2](https://developer.microsoft.com/microsoft-edge/webview2/), which is already installed on Windows 11 and up-to-date Windows 10.
-- For cables between apps, a virtual audio cable driver such as [VB-Audio Virtual Cable](https://vb-audio.com/Cable/) or [Virtual Audio Cable](https://vac.muzychenko.net/). Each driver line is a pair of devices: a playback device that apps play into and a recording device the sound comes out of. Add this pair once in the **Cables** menu, then use it in any graph.
+- For cables between apps, a virtual audio cable driver such as [VB-Audio Virtual Cable](https://vb-audio.com/Cable/) or [Virtual Audio Cable](https://vac.muzychenko.net/). Each driver line is a pair of devices: a playback device that apps play into and a recording device the sound comes out of. Add this pair once in the **Cables** menu (*Find cables* does it for you), then use it in any graph.
 
 **Linux**
 
