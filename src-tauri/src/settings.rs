@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -48,6 +48,9 @@ pub struct Settings {
     pub new_graph_volume: bool,
     /// Start with the system. The entry in the system is the truth: it is read on every request
     pub autostart: bool,
+    /// An icon in the tray: closing the window hides it there and graphs keep running;
+    /// without it closing the window quits
+    pub tray: bool,
 }
 
 impl Default for Settings {
@@ -59,6 +62,7 @@ impl Default for Settings {
             hide_minimap: false,
             new_graph_volume: true,
             autostart: false,
+            tray: false,
         }
     }
 }
@@ -152,7 +156,7 @@ pub fn settings_get(store: State<SettingsStore>) -> Settings {
 }
 
 #[tauri::command]
-pub fn settings_set(store: State<SettingsStore>, engine: State<Engine>, settings: Settings) -> CmdResult<()> {
+pub fn settings_set(app: AppHandle, store: State<SettingsStore>, engine: State<Engine>, settings: Settings) -> CmdResult<()> {
     let mut current = store.current.lock().map_err(err)?;
     if settings.autostart != crate::autostart::enabled() {
         crate::autostart::set(settings.autostart)?;
@@ -160,6 +164,7 @@ pub fn settings_set(store: State<SettingsStore>, engine: State<Engine>, settings
     let json = serde_json::to_vec_pretty(&settings).map_err(err)?;
     write_atomic(&store.path, &json).map_err(err)?;
     crate::i18n::set_language(settings.language);
+    crate::tray::set(&app, settings.tray);
     // the engine rebuilds its messages in the new language and updates the tray
     engine.settings_changed(&settings);
     *current = settings;
@@ -176,8 +181,8 @@ mod tests {
         assert_eq!(s.theme, Theme::Dark);
         assert_eq!(s.language, Settings::default().language);
         assert!(s.disable_idle_cables);
-        // missing ones are the defaults
-        assert!(s.new_graph_volume && !s.hide_minimap);
+        // missing ones are the defaults: settings of older versions have no tray
+        assert!(s.new_graph_volume && !s.hide_minimap && !s.tray);
     }
 
     #[test]
@@ -194,10 +199,11 @@ mod tests {
             theme: Theme::Light,
             language: Language::Ja,
             hide_minimap: true,
+            tray: true,
             ..Settings::default()
         };
         let back = parse(&serde_json::to_string(&s).unwrap());
-        assert_eq!((back.theme, back.language, back.hide_minimap), (Theme::Light, Language::Ja, true));
+        assert_eq!((back.theme, back.language, back.hide_minimap, back.tray), (Theme::Light, Language::Ja, true, true));
     }
 
     #[cfg(windows)]

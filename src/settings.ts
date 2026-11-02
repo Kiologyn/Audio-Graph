@@ -19,6 +19,8 @@ export type Settings = {
   newGraphVolume: boolean;
   /** Start with the system (only an installed app can) */
   autostart: boolean;
+  /** An icon in the tray: the closed window hides there; without it closing the window quits */
+  tray: boolean;
 };
 
 type SettingsState = Settings & {
@@ -35,6 +37,7 @@ const DEFAULTS: Settings = {
   hideMinimap: false,
   newGraphVolume: true,
   autostart: false,
+  tray: false,
 };
 
 // writes to disk go in order: the last request carries the latest settings
@@ -57,8 +60,7 @@ export const useSettings = create<SettingsState>()((set, get) => ({
 
   set: (patch) => {
     set(patch);
-    const { theme, language, disableIdleCables, hideMinimap, newGraphVolume, autostart } = get();
-    const settings: Settings = { theme, language, disableIdleCables, hideMinimap, newGraphVolume, autostart };
+    const { error: _error, load: _load, set: _set, ...settings } = get();
     queue = queue.then(
       () => invoke("settings_set", { settings }).then(() => set({ error: null })),
     ).catch(async (e) => {

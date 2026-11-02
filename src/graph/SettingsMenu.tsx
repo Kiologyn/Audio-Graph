@@ -69,6 +69,7 @@ export function SettingsMenu() {
   const hideMinimap = useSettings((s) => s.hideMinimap);
   const newGraphVolume = useSettings((s) => s.newGraphVolume);
   const autostart = useSettings((s) => s.autostart);
+  const tray = useSettings((s) => s.tray);
   const set = useSettings((s) => s.set);
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -120,6 +121,13 @@ export function SettingsMenu() {
             <span className="ag-settings__label">{t("settings_language")}</span>
             <LanguagePicker value={language} onChange={(language) => set({ language })} />
           </div>
+          <label className="ag-settings__check">
+            <input type="checkbox" checked={tray} onChange={(e) => set({ tray: e.currentTarget.checked })} />
+            <span>
+              {t("settings_tray")}
+              <small>{t("settings_tray_hint")}</small>
+            </span>
+          </label>
           <label className={`ag-settings__check${autostartSupported() ? "" : " is-disabled"}`}>
             <input
               type="checkbox"
@@ -129,7 +137,9 @@ export function SettingsMenu() {
             />
             <span>
               {t("settings_autostart")}
-              <small>{t(autostartSupported() ? "settings_autostart_hint" : "settings_autostart_portable")}</small>
+              <small>
+                {t(!autostartSupported() ? "settings_autostart_portable" : tray ? "settings_autostart_hint" : "settings_autostart_hint_window")}
+              </small>
             </span>
           </label>
           {/* Linux virtual cables exist only while the graph runs anyway */}
@@ -166,8 +176,9 @@ export function SettingsMenu() {
               <small>{t("settings_new_graph_volume_hint")}</small>
             </span>
           </label>
-          {/* on Linux the tray icon isn't shown everywhere (GNOME without an extension), and quitting is in its menu */}
-          {platform() === "linux" && (
+          {/* on Linux the tray icon isn't shown everywhere (GNOME without an extension), and quitting is in its menu;
+              without the tray closing the window quits */}
+          {platform() === "linux" && tray && (
             <button className="ag-settings__quit" onClick={() => invoke("app_quit")}>
               {t("quit_app")}
               <small>{t("quit_app_hint")}</small>

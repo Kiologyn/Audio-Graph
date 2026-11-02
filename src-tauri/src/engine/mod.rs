@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, State};
 
 /// How often the engine checks the system: default devices, failed streams,
 /// running apps. More often on Linux: new app streams are moved by this poll,
@@ -337,7 +337,7 @@ fn supervise(
                 }
                 Msg::Settings { disable_idle_cables: disable } => {
                     disable_idle_cables = disable;
-                    // the language may have changed: the tray is redrawn below, messages are rebuilt in the plan
+                    // the language may have changed or the tray turned on: it is redrawn below, messages are rebuilt in the plan
                     tray_shows = None;
                 }
                 Msg::Shutdown(tx) => {
@@ -449,9 +449,8 @@ fn supervise(
             crate::i18n::language(),
         );
         if tray_shows.as_ref() != Some(&names) {
-            // the tray is created after the engine: nothing to update before that
-            if let Some(tray) = app.try_state::<crate::tray::Tray>() {
-                tray.update(&app, &names.0, names.1.as_deref(), names.2);
+            // the tray is created after the engine and may be off: nothing to update then
+            if crate::tray::update(&app, &names.0, names.1.as_deref(), names.2) {
                 tray_shows = Some(names);
             }
         }

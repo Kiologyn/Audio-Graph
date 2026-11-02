@@ -21,9 +21,9 @@ The graph above sends Spotify to the headphones and, at the same time, mixes it 
 - **Problems are shown in place.** Missing devices, loops, an app connected to two outputs, conflicts between running graphs: the node gets a red note, the arrow turns red, and the header lists everything.
 - **Devices that come and go.** When a chosen device is unplugged, its node says so; when it is back, the graph picks it up within a moment. A device that comes back under another id (other USB port, another Bluetooth profile on Linux) is found by its name, as long as only one device has that name.
 - **Everything is put back.** When a graph stops or the app quits, apps get their previous devices and volumes, and the system gets its previous default devices. If the app is killed, this happens on the next start.
-- **Tray.** Closing the window hides it to the tray; graphs keep running. Start, stop and quit from the tray menu. Starting the app again shows the hidden window.
-- **Start with the system.** The installed app (not the portable file or the AppImage) can start in the tray when you sign in, and start the graphs marked in their options.
-- **Settings.** Light, dark or system theme; English, Russian, Spanish, Chinese or Japanese; hiding the graph map; volume sliders in new graphs; on Windows, turning the cables of a graph off while it isn't running.
+- **Tray.** Turned on in the settings: closing the window then hides it to the tray, and graphs keep running. Start, stop and quit from the tray menu. Starting the app again shows the hidden window. Without the tray, closing the window quits.
+- **Start with the system.** The installed app (not the portable file or the AppImage) can start when you sign in, in the tray or minimized, and start the graphs marked in their options.
+- **Settings.** Light, dark or system theme; the tray; English, Russian, Spanish, Chinese or Japanese; hiding the graph map; volume sliders in new graphs; on Windows, turning the cables of a graph off while it isn't running.
 
 ## Requirements
 
@@ -38,7 +38,7 @@ The graph above sends Spotify to the headphones and, at the same time, mixes it 
 - PipeWire with `pipewire-pulse` (Ubuntu 22.10+, Fedora 34+ and most current distributions) or PulseAudio.
 - `libpulse0` and WebKitGTK 4.1, which desktop distributions already have.
 - No cable driver is needed: cables are created by the graph.
-- The tray icon needs a tray in the desktop (on GNOME, the AppIndicator extension). Without it, quit from the settings menu.
+- The tray icon needs a tray in the desktop (on GNOME, the AppIndicator extension). If the tray is on in the settings but the desktop doesn't show it, quit from the settings menu.
 
 ## How it works
 
