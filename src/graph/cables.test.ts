@@ -76,6 +76,33 @@ describe("cables", () => {
     });
   });
 
+  // VB-Cable: a speaker input and a 16-channel one into one output; a VAC line: the same sound on its Mic device
+  const spares = [
+    device("in", "render", { pair: "out", pairName: "CABLE" }),
+    device("in16", "render", { pair: "out", pairName: "CABLE" }),
+    device("out", "capture", { pair: "in", pairName: "CABLE" }),
+    ...lines,
+    device("m1", "capture", { pair: "r1", pairName: "Line 1" }),
+  ];
+
+  it("found by the driver aren't offered again for a spare side", () => {
+    expect(newFoundCables([], spares).map((f) => [f.name, f.sides.render?.type === "device" && f.sides.render.id])).toEqual([
+      ["CABLE", "in"],
+      ["Line 1", "r1"],
+      ["Line 2", "r2"],
+    ]);
+  });
+
+  it("with a spare side are no mismatch", () => {
+    expect(cableMismatch(cable("multichannel", "in16", "out"), spares)).toBeNull();
+    expect(cableMismatch(cable("mic line", "r1", "m1"), spares)).toBeNull();
+    // but a spare side of another cable still is
+    expect(cableMismatch(cable("mixed", "in16", "c1"), spares)).toEqual({
+      code: "cable_output_mismatch",
+      vars: { device: "in16", pair: "out" },
+    });
+  });
+
   it("are on, off, partly on or not in the system", () => {
     expect(cablePower(cable("a", "r1", "c1"), lines)).toBe("on");
     expect(cablePower(cable("b", "r2", "c2"), lines)).toBe("off");

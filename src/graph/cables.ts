@@ -126,12 +126,14 @@ export function cableDeviceOwners(cables: Cable[]): Map<string, string> {
 
 /**
  * Virtual cables found by driver properties that aren't in the list yet: an output device
- * and the recording device its driver pairs with it. A cable with exactly these two devices counts as present.
+ * and the recording device its driver pairs with it, both pointing to each other (a spare side
+ * isn't offered as one more cable). A cable with exactly these two devices counts as present.
  */
 export function newFoundCables(cables: Cable[], devices: AudioDevice[]): { name: string; sides: Pick<Cable, "render" | "capture"> }[] {
   const present = new Set(cables.map((c) => `${c.render?.type === "device" ? c.render.id : ""}|${c.capture?.type === "device" ? c.capture.id : ""}`));
   return devices.flatMap((render) => {
-    const capture = render.flow === "render" && devices.find((d) => d.flow === "capture" && d.id === render.pair);
+    const capture =
+      render.flow === "render" && devices.find((d) => d.flow === "capture" && d.id === render.pair && d.pair === render.id);
     if (!capture || present.has(`${render.id}|${capture.id}`)) return [];
     return [
       {
@@ -154,11 +156,14 @@ export function cableMismatch(cable: Cable, devices: AudioDevice[]): { code: str
   if (!renderId || !captureId) return null;
   const render = devices.find((d) => d.flow === "render" && d.id === renderId);
   const capture = devices.find((d) => d.flow === "capture" && d.id === captureId);
-  for (const [device, other, chosen, code] of [
-    [render, "capture", captureId, "cable_output_mismatch"],
-    [capture, "render", renderId, "cable_input_mismatch"],
+  // a spare side points to the main one only: VB-Cable's 16-channel input plays into
+  // CABLE Output, though CABLE Output points to CABLE Input
+  if (render?.pair === captureId || capture?.pair === renderId) return null;
+  for (const [device, other, code] of [
+    [render, "capture", "cable_output_mismatch"],
+    [capture, "render", "cable_input_mismatch"],
   ] as const) {
-    if (!device?.pair || device.pair === chosen) continue;
+    if (!device?.pair) continue;
     const pair = devices.find((d) => d.flow === other && d.id === device.pair);
     if (pair) return { code, vars: { device: device.name, pair: pair.name } };
   }

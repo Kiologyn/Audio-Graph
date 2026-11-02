@@ -43,7 +43,8 @@ pub struct AudioDevice {
     pub is_default: bool,
     /// A cable device the graph created itself (Linux): nodes don't choose it
     pub is_virtual: bool,
-    /// The other side of the virtual cable this device belongs to, found by driver properties (Windows)
+    /// The other side of the virtual cable this device belongs to, found by driver properties (Windows).
+    /// A cable's main sides point to each other, a spare side to the main one only (see pairs.rs)
     pub pair: Option<String>,
     /// The name of that cable: "Line 1"
     pub pair_name: Option<String>,

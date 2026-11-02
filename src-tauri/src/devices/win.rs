@@ -28,6 +28,10 @@ const PKEY_DEVICE_DESC: PROPERTYKEY = key(0xa45c254e_df1c_4efd_8020_67d146a850e0
 const PKEY_ENUMERATOR: PROPERTYKEY = key(0xa45c254e_df1c_4efd_8020_67d146a850e0, 24);
 /// The driver device the endpoint belongs to: "{1}.ROOT\{83ED7F0E-...}\0000"
 const PKEY_DRIVER_DEVICE: PROPERTYKEY = key(0xb3f8fa53_0004_438e_9003_51a46e139bfc, 2);
+/// The driver device's name: "Virtual Audio Cable"
+const PKEY_DRIVER_NAME: PROPERTYKEY = key(0xb3f8fa53_0004_438e_9003_51a46e139bfc, 6);
+/// The hardware id the driver was installed for: "VBVoicemeeterVAIO" (DEVPKEY_Device_MatchingDeviceId)
+const PKEY_HARDWARE: PROPERTYKEY = key(0xa8b865dd_2e3d_4094_ad97_e593a70c75d6, 8);
 /// The driver filter the endpoint is connected to: "{2}.\\?\root#...#{...}\wave1_r_rt"
 const PKEY_FILTER: PROPERTYKEY = key(0x233164c8_1b2c_4c7d_bc68_b671687a2567, 1);
 
@@ -50,6 +54,8 @@ fn endpoint(store: &IPropertyStore, id: &str, render: bool) -> Endpoint {
         render,
         name: get(&PKEY_DEVICE_DESC),
         driver: unmark(get(&PKEY_DRIVER_DEVICE)),
+        driver_name: get(&PKEY_DRIVER_NAME),
+        hardware: get(&PKEY_HARDWARE),
         enumerator: get(&PKEY_ENUMERATOR),
         filter: get(&PKEY_FILTER).rsplit('\\').next().unwrap_or_default().to_string(),
     }
@@ -116,11 +122,10 @@ pub fn list() -> Result<Vec<AudioDevice>> {
     let mut listed = list_flow(&enumerator, eRender, Flow::Render)?;
     listed.extend(list_flow(&enumerator, eCapture, Flow::Capture)?);
     let (mut devices, endpoints): (Vec<AudioDevice>, Vec<Endpoint>) = listed.into_iter().unzip();
-    for pair in pairs::find(&endpoints) {
-        for d in devices.iter_mut() {
-            let other = if d.id == pair.render { &pair.capture } else if d.id == pair.capture { &pair.render } else { continue };
-            d.pair = Some(other.clone());
-            d.pair_name = Some(pair.name.clone());
+    for link in pairs::find(&endpoints) {
+        if let Some(d) = devices.iter_mut().find(|d| d.id == link.device) {
+            d.pair = Some(link.other);
+            d.pair_name = Some(link.name);
         }
     }
     Ok(devices)
@@ -215,6 +220,25 @@ impl Drop for KeepDefaults {
     fn drop(&mut self) {
         for (id, role) in &self.0 {
             let _ = set_default(id, *role);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What the drivers tell about this machine's devices, to teach pairs.rs a new driver:
+    /// cargo test driver_properties -- --nocapture
+    #[test]
+    fn prints_driver_properties() {
+        let _com = ComGuard::init();
+        let enumerator: IMMDeviceEnumerator = unsafe { CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL) }.unwrap();
+        for (flow, kind) in [(eRender, Flow::Render), (eCapture, Flow::Capture)] {
+            for (d, e) in list_flow(&enumerator, flow, kind).unwrap() {
+                println!("{kind:?} {} | {:?} {} on {} | hardware {} | filter {}", d.name, e.driver_name, e.driver, e.enumerator, e.hardware, e.filter);
+                assert!(e.driver.is_empty() || !e.driver_name.is_empty(), "{} has a driver device without a name", d.name);
+            }
         }
     }
 }
