@@ -113,7 +113,8 @@ function RunState({ id }: { id: string }) {
   const running = useEngine((s) => s.status.running.includes(id));
   const troubled = useEngine((s) => s.status.troubled.includes(id));
   const t = useT();
-  if (!running) return <span className="ag-graphs__state" />;
+  // a stopped graph has no dot, and its name moves up to the grip
+  if (!running) return null;
   return (
     <span
       className={`ag-graphs__state is-running${troubled ? " is-troubled" : ""}`}
