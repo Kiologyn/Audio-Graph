@@ -88,11 +88,15 @@ Here `npm version` only changes the number (see `.npmrc`): committing and taggin
 ### Tests
 
 ```sh
+npm test                       # the interface: graph files, undo, node problems, devices and cables, translations
+
 cd src-tauri
-cargo test                     # the graph planner, mixing buffers, translations
-cargo test -- --ignored        # Windows: tests on real devices, need Virtual Audio Cable and change device settings
+cargo test                     # the graph planner, storage, settings, mixing buffers, calibration, translations
+cargo test -- --ignored --test-threads=1   # Windows: tests on real devices, need Virtual Audio Cable lines 1 and 2 turned on
 cargo test engine::linux -- --ignored --test-threads=1   # Linux: tests on the audio server, need pactl, pacat and parec
 ```
+
+The Windows device tests play only into the cables, turn cable devices off and on for a moment, and put the system's default devices back afterwards.
 
 The app keeps its data in `%APPDATA%\dev.audiograph.app` on Windows and `~/.local/share/dev.audiograph.app` on Linux: graphs, cables, settings, the journal of changed app devices and default devices, and a log (`logs/audio-graph.log`).
 
