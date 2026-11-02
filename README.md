@@ -112,6 +112,7 @@ The app keeps its data in `%APPDATA%\dev.audiograph.app` on Windows and `~/.loca
 | `src-tauri/src/engine/win/` | Executes the plan on Windows: audio streams (`streams.rs`) and Windows device settings (`router.rs`) |
 | `src-tauri/src/engine/linux.rs` | Executes the plan on Linux through the audio server (`src-tauri/src/pulse.rs`) |
 | `src-tauri/src/calibrate/` | Delay calibration: plays the sweep, records the microphone and finds the sweep in the recording |
+| `src-tauri/src/devices/pairs.rs` | Finds the two devices of each virtual cable by what the drivers tell about them (Windows) |
 | `src-tauri/src/` | Storage of graphs, cables and settings, device and app lists and their changes, autostart, the tray |
 
 ## Translations
