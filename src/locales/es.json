@@ -201,7 +201,7 @@
   "issue_app_fan_in": "Una aplicación tiene un solo dispositivo de entrada. Para que oiga varias fuentes, mézclalas en un cable y conecta el cable a la aplicación",
   "issue_system_node_repeated": "El nodo «Sistema» aparece varias veces en el grafo: solo hay un dispositivo predeterminado",
   "issue_app_repeated": "«{app}» aparece varias veces en el grafo: una aplicación solo tiene una configuración de dispositivos",
-  "issue_default_output_loop": "Bucle: el dispositivo de salida predeterminado es ahora la entrada del cable «{cable}» (lo asignó el nodo «Sistema»), así que el audio del cable volvería a él mismo",
+  "issue_default_output_loop": "Bucle: el dispositivo de salida predeterminado es ahora la entrada del cable «{cable}», así que el audio del cable volvería a él mismo",
   "issue_cable_into_itself": "Bucle: el audio del cable «{cable}» volvería a él mismo",
   "issue_app_taken": "«{app}» ya lo dirige el grafo en marcha «{graph}»: una aplicación solo tiene una configuración de dispositivos",
   "issue_defaults_taken": "Los dispositivos predeterminados ya los asigna el grafo en marcha «{graph}»",

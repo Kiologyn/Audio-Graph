@@ -436,11 +436,9 @@ pub fn graph_import(
     engine: State<Engine>,
     path: PathBuf,
 ) -> CmdResult<Graph> {
-    let text = fs::read_to_string(&path).map_err(err)?;
-    let (mut graph, listed) = match serde_json::from_str::<ExportFile>(&text) {
-        Ok(f) if f.format == EXPORT_FORMAT => (f.graph, f.cables),
-        _ => (serde_json::from_str::<Graph>(&text).map_err(|_| tr!("error_import_not_graph"))?, Vec::new()),
-    };
+    let (mut graph, listed) = parse_import(&fs::read_to_string(&path).map_err(err)?)?;
+    // checked before the cable list changes: a file that fails leaves nothing behind
+    let name = clean_name(&graph.name)?;
     if !DYNAMIC_CABLES {
         let ids = cables.adopt(&listed, &engine)?;
         for node in &mut graph.nodes {
@@ -449,21 +447,36 @@ pub fn graph_import(
             }
         }
     }
-    renew_ids(&mut graph);
 
     let _guard = store.lock.lock().map_err(err)?;
     let names: Vec<String> = store.list()?.into_iter().map(|g| g.name).collect();
-    let now = now_ms();
-    graph.version = FORMAT_VERSION;
-    graph.name = unique_name(&clean_name(&graph.name)?, names.iter().map(String::as_str));
-    graph.created_at = now;
-    graph.updated_at = now;
-    // an imported graph starts with the app only once it is marked on this computer
-    graph.start_on_launch = false;
+    graph.name = unique_name(&name, names.iter().map(String::as_str));
+    welcome(&mut graph, now_ms());
     store.write(&graph)?;
     store.set_last_opened(Some(&graph.id))?;
     engine.opened(&graph);
     Ok(graph)
+}
+
+/// The graph and the cables of an import file: an export file, or a graph file from another
+/// computer's data folder (no cables then)
+fn parse_import(text: &str) -> CmdResult<(Graph, Vec<Cable>)> {
+    match serde_json::from_str::<ExportFile>(text) {
+        Ok(f) if f.format == EXPORT_FORMAT => Ok((f.graph, f.cables)),
+        _ => serde_json::from_str::<Graph>(text)
+            .map(|g| (g, Vec::new()))
+            .map_err(|_| tr!("error_import_not_graph")),
+    }
+}
+
+/// An imported graph becomes this computer's own: new ids, created now, current file format.
+/// It starts with the app only once it is marked on this computer
+fn welcome(graph: &mut Graph, now: u64) {
+    renew_ids(graph);
+    graph.version = FORMAT_VERSION;
+    graph.created_at = now;
+    graph.updated_at = now;
+    graph.start_on_launch = false;
 }
 
 /// New ids for a graph, its nodes and edges; edges follow their nodes
@@ -474,8 +487,9 @@ fn renew_ids(graph: &mut Graph) {
     for node in &mut graph.nodes {
         node.id = ids[&node.id].clone();
     }
-    // edges to nodes that aren't there are dropped
-    graph.edges.retain(|e| ids.contains_key(&e.source) && ids.contains_key(&e.target));
+    // edges to nodes that aren't there are dropped, and so are repeated ones: an edge's id is its ends
+    let mut seen = std::collections::HashSet::new();
+    graph.edges.retain(|e| ids.contains_key(&e.source) && ids.contains_key(&e.target) && seen.insert((e.source.clone(), e.target.clone())));
     for edge in &mut graph.edges {
         edge.source = ids[&edge.source].clone();
         edge.target = ids[&edge.target].clone();
@@ -516,9 +530,123 @@ mod tests {
         assert_eq!(graph.edges[0].id, format!("{a}->{b}"));
     }
 
+    fn graph(id: &str, created_at: u64, start_on_launch: bool) -> Graph {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "name": id, "createdAt": created_at, "updatedAt": created_at, "startOnLaunch": start_on_launch,
+        }))
+        .unwrap()
+    }
+
+    fn ids(graphs: Vec<GraphMeta>) -> Vec<String> {
+        graphs.into_iter().map(|g| g.id).collect()
+    }
+
     #[test]
-    fn unique_names() {
-        assert_eq!(unique_name("Music", ["Games"]), "Music");
-        assert_eq!(unique_name("Music", ["Music", "Music 2"]), "Music 3");
+    fn list_follows_the_users_order_and_skips_damaged_files() {
+        let dir = crate::storage::test_dir("graph-list");
+        let store = GraphStore::new(dir.clone()).unwrap();
+        for (id, created) in [("a", 3), ("b", 1), ("c", 2)] {
+            store.write(&graph(id, created, false)).unwrap();
+        }
+        fs::write(dir.join("graphs").join("broken.json"), "{").unwrap();
+        fs::write(dir.join("graphs").join("notes.txt"), "not a graph").unwrap();
+        // no order yet: oldest first
+        assert_eq!(ids(store.list().unwrap()), ["b", "c", "a"]);
+        // the arranged ones first, the rest after them, oldest first
+        fs::write(dir.join("settings.json"), r#"{"graphOrder":["a","gone"]}"#).unwrap();
+        assert_eq!(ids(store.list().unwrap()), ["a", "b", "c"]);
+    }
+
+    #[test]
+    fn launch_graphs_are_the_marked_ones_in_list_order() {
+        let dir = crate::storage::test_dir("graph-launch");
+        let store = GraphStore::new(dir.clone()).unwrap();
+        for (id, created, marked) in [("a", 1, true), ("b", 2, false), ("c", 3, true)] {
+            store.write(&graph(id, created, marked)).unwrap();
+        }
+        fs::write(dir.join("settings.json"), r#"{"graphOrder":["c","b","a"]}"#).unwrap();
+        let launched: Vec<String> = store.launch_graphs().unwrap().into_iter().map(|g| g.id).collect();
+        assert_eq!(launched, ["c", "a"]);
+    }
+
+    #[test]
+    fn ids_cant_point_outside_the_graphs_folder() {
+        let dir = crate::storage::test_dir("graph-ids");
+        let store = GraphStore::new(dir.clone()).unwrap();
+        fs::write(dir.join("preferences.json"), "{}").unwrap();
+        assert!(store.read("../preferences").is_err());
+        assert!(store.write(&graph("../escape", 1, false)).is_err());
+        assert!(!dir.join("escape.json").exists());
+    }
+
+    /// A file of the first version: the fields added since get the values they had before them
+    #[test]
+    fn old_files_get_defaults() {
+        let text = r#"{"id":"g","name":"Old","createdAt":1,"updatedAt":1,
+            "nodes":[{"id":"o","kind":"output","label":"Speakers","position":{"x":0,"y":0},
+                      "sink":{"type":"device","id":"spk","name":"Speakers"}}]}"#;
+        let g: Graph = serde_json::from_str(text).unwrap();
+        assert_eq!(g.version, FORMAT_VERSION);
+        assert!(g.show_volume && !g.show_delay && !g.show_balance && !g.start_on_launch);
+        assert_eq!(g.delay_limit, 0.5);
+        assert!(g.edges.is_empty() && g.viewport.is_none());
+        let n = &g.nodes[0];
+        assert_eq!((n.volume, n.delay, n.balance), (1.0, 0.0, 0.0));
+        assert_eq!(n.sink, Some(DeviceRef::Device { id: "spk".into(), name: "Speakers".into() }));
+    }
+
+    #[test]
+    fn delay_range_is_only_there_with_the_sliders_on_and_stays_within_the_engine() {
+        let mut g = graph("g", 1, false);
+        assert_eq!(g.delay_limit(), None);
+        g.show_delay = true;
+        assert_eq!(g.delay_limit(), Some(0.5));
+        g.delay_limit = 0.0;
+        assert_eq!(g.delay_limit(), Some(0.001));
+        g.delay_limit = 10.0;
+        assert_eq!(g.delay_limit(), Some(MAX_DELAY_LIMIT));
+    }
+
+    #[test]
+    fn import_reads_export_files_and_plain_graph_files() {
+        let graph_json = r#"{"id":"g","name":"Music","createdAt":1,"updatedAt":1}"#;
+        let export = format!(
+            r#"{{"format":"audio-graph","graph":{graph_json},"cables":[{{"id":"c","name":"Line 1","createdAt":1}}]}}"#
+        );
+        let (g, cables) = parse_import(&export).unwrap();
+        assert_eq!((g.name.as_str(), cables.len()), ("Music", 1));
+        let (g, cables) = parse_import(graph_json).unwrap();
+        assert_eq!((g.name.as_str(), cables.len()), ("Music", 0));
+        // something else entirely
+        for text in ["", "{}", "[1,2]", r#"{"format":"other","graph":{}}"#, r#"{"format":"audio-graph","graph":{"id":"g"}}"#] {
+            assert!(parse_import(text).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn exported_graph_comes_back_the_same_but_new() {
+        let mut original = graph("g", 1, true);
+        original.version = 0;
+        original.nodes = serde_json::from_str(
+            r#"[{"id":"a","kind":"app","label":"Player","position":{"x":0,"y":0},"volume":0.5,
+                 "app":{"exe":"player.exe","path":"C:\\player.exe","name":"Player"}},
+                {"id":"b","kind":"cable","label":"Cable","position":{"x":1,"y":0},"cable":"c"}]"#,
+        )
+        .unwrap();
+        original.edges = serde_json::from_str(
+            r#"[{"id":"a->b","source":"a","target":"b"},{"id":"a->b","source":"a","target":"b"}]"#,
+        )
+        .unwrap();
+        let file = ExportFile { format: EXPORT_FORMAT.into(), graph: original.clone(), cables: Vec::new() };
+        let (mut imported, _) = parse_import(&serde_json::to_string(&file).unwrap()).unwrap();
+        welcome(&mut imported, 99);
+        assert_ne!(imported.id, original.id);
+        assert_eq!((imported.version, imported.created_at, imported.updated_at), (FORMAT_VERSION, 99, 99));
+        assert!(!imported.start_on_launch, "starting with the app is marked on each computer");
+        // the content is kept: the app, its volume, the cable; the repeated edge is one edge
+        assert_eq!(imported.nodes[0].app, original.nodes[0].app);
+        assert_eq!(imported.nodes[0].volume, 0.5);
+        assert_eq!(imported.nodes[1].cable.as_deref(), Some("c"));
+        assert_eq!(imported.edges.len(), 1);
     }
 }

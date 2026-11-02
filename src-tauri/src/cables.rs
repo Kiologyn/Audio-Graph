@@ -185,10 +185,14 @@ pub fn cable_update(store: State<CableStore>, engine: State<Engine>, cable: Cabl
 pub fn cables_reorder(store: State<CableStore>, engine: State<Engine>, ids: Vec<String>) -> CmdResult<()> {
     let _guard = store.lock.lock().map_err(err)?;
     let mut cables = store.read()?;
-    let place = |id: &str| ids.iter().position(|o| o == id).unwrap_or(usize::MAX);
-    // the sort is stable: cables not in the list stay in their order
-    cables.sort_by_key(|c| place(&c.id));
+    reorder(&mut cables, &ids);
     store.write(cables, &engine)
+}
+
+/// The cables in the order of the ids; the sort is stable, so cables missing from the ids keep their order
+fn reorder(cables: &mut [Cable], ids: &[String]) {
+    let place = |id: &str| ids.iter().position(|o| o == id).unwrap_or(usize::MAX);
+    cables.sort_by_key(|c| place(&c.id));
 }
 
 #[tauri::command]
@@ -230,5 +234,58 @@ mod tests {
         assert_eq!(list.len(), 3);
         assert_eq!(ids["y"], list[2].id);
         assert_eq!(list[2].name, "Calls 2");
+    }
+
+    #[test]
+    fn imported_cable_is_found_by_id_before_devices() {
+        let mut list = vec![cable("1", "Line 1", Some("dev-1")), cable("2", "Line 2", Some("dev-2"))];
+        // this computer's cable 2, its device changed since the export
+        let ids = merge(&mut list, &[cable("2", "Line 2", Some("dev-1"))]).unwrap();
+        assert_eq!((ids["2"].as_str(), list.len()), ("2", 2));
+    }
+
+    #[test]
+    fn cables_without_devices_are_never_the_same_cable() {
+        let mut list = vec![cable("1", "Calls", None)];
+        let ids = merge(&mut list, &[cable("x", "Calls", None)]).unwrap();
+        assert_ne!(ids["x"], "1");
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[1].name, "Calls 2");
+    }
+
+    #[test]
+    fn imported_default_device_is_left_out() {
+        let mut list = Vec::new();
+        let mut incoming = cable("x", "Odd", Some("dev-1"));
+        incoming.capture = Some(DeviceRef::Default);
+        merge(&mut list, &[incoming]).unwrap();
+        assert!(list[0].render.is_some());
+        assert_eq!(list[0].capture, None);
+        assert!(check_device(&list[0].capture).is_ok() && check_device(&Some(DeviceRef::Default)).is_err());
+    }
+
+    #[test]
+    fn imported_cable_with_an_empty_name_fails() {
+        assert!(merge(&mut Vec::new(), &[cable("x", "  ", Some("dev-1"))]).is_err());
+    }
+
+    #[test]
+    fn reorder_puts_unknown_cables_last_in_their_order() {
+        let mut list = vec![cable("a", "A", None), cable("b", "B", None), cable("c", "C", None), cable("d", "D", None)];
+        reorder(&mut list, &["c".into(), "gone".into(), "a".into()]);
+        let order: Vec<&str> = list.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(order, ["c", "a", "b", "d"]);
+    }
+
+    #[test]
+    fn missing_file_is_an_empty_list_and_a_damaged_one_an_error() {
+        let dir = crate::storage::test_dir("cables-file");
+        let store = CableStore::new(&dir);
+        assert!(store.all().unwrap().is_empty());
+        // a damaged list must not silently become empty: the next write would lose the cables
+        fs::write(dir.join("cables.json"), "{").unwrap();
+        assert!(store.all().is_err());
+        fs::write(dir.join("cables.json"), r#"{"cables":[{"id":"1","name":"Line 1","createdAt":1}]}"#).unwrap();
+        assert_eq!(store.all().unwrap()[0].name, "Line 1");
     }
 }

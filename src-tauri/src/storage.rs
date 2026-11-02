@@ -52,3 +52,53 @@ pub fn clean_name(name: &str) -> CmdResult<String> {
         Ok(name.chars().take(100).collect())
     }
 }
+
+/// An empty folder of the test's own for its files
+#[cfg(test)]
+pub fn test_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("audio-graph-test-{name}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ids_are_safe_file_names() {
+        assert!(check_id("51d05ea4-b887-4599-a6b9-1161a689abff").is_ok());
+        for bad in ["", "../preferences", "a/b", r"a\b", "a.json", "c:", "имя", &"a".repeat(65)] {
+            assert!(check_id(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn names_are_trimmed_and_cut_by_characters() {
+        assert_eq!(clean_name("  Music \n").unwrap(), "Music");
+        assert!(clean_name(" \t ").is_err());
+        // a cut in the middle of a letter would be invalid text
+        let name = clean_name(&"я".repeat(150)).unwrap();
+        assert_eq!(name.chars().count(), 100);
+    }
+
+    #[test]
+    fn unique_names_count_up() {
+        assert_eq!(unique_name("Music", ["Games"]), "Music");
+        assert_eq!(unique_name("Music", ["Music", "Music 2"]), "Music 3");
+        // a gap is taken first
+        assert_eq!(unique_name("Music", ["Music", "Music 3"]), "Music 2");
+    }
+
+    #[test]
+    fn atomic_write_replaces_the_file_and_leaves_nothing_behind() {
+        let dir = test_dir("atomic");
+        let path = dir.join("cables.json");
+        write_atomic(&path, b"old").unwrap();
+        write_atomic(&path, b"new").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"new");
+        let files: Vec<_> = fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(files, ["cables.json"]);
+    }
+}

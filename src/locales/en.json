@@ -201,7 +201,7 @@
   "issue_app_fan_in": "An app has one input device. For it to hear several sources, mix them into a cable and connect the cable to the app",
   "issue_system_node_repeated": "The “System” node appears in the graph more than once: there is only one default device",
   "issue_app_repeated": "“{app}” appears in the graph more than once: an app has only one device setting",
-  "issue_default_output_loop": "Loop: the default output device is now the input of cable “{cable}” (set by the “System” node), so the cable's audio would return into itself",
+  "issue_default_output_loop": "Loop: the default output device is now the input of cable “{cable}”, so the cable's audio would return into itself",
   "issue_cable_into_itself": "Loop: the audio of cable “{cable}” would return into itself",
   "issue_app_taken": "“{app}” is already routed by the running graph “{graph}”: an app has only one device setting",
   "issue_defaults_taken": "The default devices are already set by the running graph “{graph}”",

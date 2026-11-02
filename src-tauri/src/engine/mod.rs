@@ -35,6 +35,11 @@ use tauri::{AppHandle, Emitter, Manager, State};
 /// and polling the audio server is cheap
 const TICK: Duration = Duration::from_millis(if cfg!(target_os = "linux") { 500 } else { 1500 });
 
+/// After a device change the engine checks more often for a while: streams of a device that came
+/// back reopen within a fraction of a second, and the window shows it at once, not a tick later
+const RECHECK: Duration = Duration::from_millis(200);
+const RECHECK_FOR: Duration = Duration::from_secs(2);
+
 /// Cables are virtual devices the graph creates itself (Linux), not device pairs
 /// from the shared list (on Windows a driver installs the virtual devices)
 pub const DYNAMIC_CABLES: bool = cfg!(target_os = "linux");
@@ -270,10 +275,12 @@ fn supervise(
     // the system's devices: chosen devices that changed their id are found in it by name
     let mut devices = crate::devices::list().unwrap_or_default();
     let same = |g: &Option<Graph>, id: &str| g.as_ref().is_some_and(|g| g.id == id);
+    let mut recheck_until: Option<std::time::Instant> = None;
 
     loop {
         let mut messages: Vec<Msg> = Vec::new();
-        match rx.recv_timeout(TICK) {
+        let rechecking = recheck_until.is_some_and(|t| t > std::time::Instant::now());
+        match rx.recv_timeout(if rechecking { RECHECK } else { TICK }) {
             Ok(msg) => messages.push(msg),
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return,
@@ -345,11 +352,14 @@ fn supervise(
             devices = crate::devices::list().unwrap_or(devices);
             // streams of a device that is back open now, not after their retry pause
             backend.retry_now();
+            recheck_until = Some(std::time::Instant::now() + RECHECK_FOR);
             let _ = app.emit("devices-changed", ());
         }
 
+        // cables with the ids of their devices as the system has them now
+        let listed: Vec<Cable> = cables.iter().map(|c| resolve_cable(c, &devices)).collect();
         // a graph's cables are turned on before the engine opens their devices
-        let used = cable_devices(&running, &cables);
+        let used = cable_devices(&running, &listed);
         if disable_idle_cables {
             let added: BTreeSet<String> = used.difference(&powered).cloned().collect();
             if !added.is_empty() {
@@ -367,7 +377,6 @@ fn supervise(
             .map(|g| resolve_devices(g, &devices))
             .collect();
         let checked: Vec<&Graph> = resolved.iter().collect();
-        let listed: Vec<Cable> = cables.iter().map(|c| resolve_cable(c, &devices)).collect();
         let plans = if DYNAMIC_CABLES {
             // every cable node has its own virtual device: the plan is the same as with listed cables
             let virtualized: Vec<_> = checked.iter().map(|g| plan::virtualize(g)).collect();
@@ -551,4 +560,77 @@ pub fn engine_volume(engine: State<Engine>, graph: String, node: String, volume:
         node,
         volume: volume.clamp(0.0, 2.0),
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::devices::DeviceState;
+
+    fn device(id: &str, name: &str, flow: Flow) -> AudioDevice {
+        AudioDevice {
+            id: id.into(),
+            name: name.into(),
+            flow,
+            state: DeviceState::Active,
+            is_default: false,
+            is_virtual: false,
+            pair: None,
+            pair_name: None,
+        }
+    }
+
+    fn graph(nodes: serde_json::Value) -> Graph {
+        serde_json::from_value(serde_json::json!({"id": "g", "name": "g", "createdAt": 1, "updatedAt": 1, "nodes": nodes})).unwrap()
+    }
+
+    fn chosen(id: &str, name: &str) -> Option<DeviceRef> {
+        Some(DeviceRef::Device { id: id.into(), name: name.into() })
+    }
+
+    #[test]
+    fn devices_with_a_new_id_are_found_by_name() {
+        let devices = [device("usb-2", "Headphones", Flow::Render), device("mic-2", "Mic", Flow::Capture)];
+        let g = graph(serde_json::json!([
+            {"id": "o", "kind": "output", "label": "o", "position": {"x": 0, "y": 0},
+             "sink": {"type": "device", "id": "usb-1", "name": "Headphones"}},
+            {"id": "i", "kind": "input", "label": "i", "position": {"x": 0, "y": 0},
+             "source": {"type": "device", "id": "mic-1", "name": "Mic"}},
+            {"id": "d", "kind": "output", "label": "d", "position": {"x": 0, "y": 0}, "sink": {"type": "default"}},
+            {"id": "x", "kind": "output", "label": "x", "position": {"x": 0, "y": 0},
+             "sink": {"type": "device", "id": "gone", "name": "Unplugged"}}
+        ]));
+        let resolved = resolve_devices(&g, &devices);
+        assert_eq!(resolved.nodes[0].sink, chosen("usb-2", "Headphones"));
+        assert_eq!(resolved.nodes[1].source, chosen("mic-2", "Mic"));
+        assert_eq!(resolved.nodes[2].sink, Some(DeviceRef::Default));
+        // not found: stays as it was, the node says the device is missing
+        assert_eq!(resolved.nodes[3].sink, chosen("gone", "Unplugged"));
+        // the graph itself isn't changed: the file keeps what the user chose
+        assert_eq!(g.nodes[0].sink, chosen("usb-1", "Headphones"));
+
+        let cable = Cable { id: "c".into(), name: "c".into(), render: chosen("usb-1", "Headphones"), capture: chosen("mic-1", "Mic"), created_at: 0 };
+        let resolved = resolve_cable(&cable, &devices);
+        assert_eq!((resolved.render, resolved.capture), (chosen("usb-2", "Headphones"), chosen("mic-2", "Mic")));
+    }
+
+    #[test]
+    fn cable_devices_are_those_of_used_listed_cables() {
+        let cable = |id: &str, render: Option<DeviceRef>, capture: Option<DeviceRef>| Cable { id: id.into(), name: id.into(), render, capture, created_at: 0 };
+        let cables = [
+            cable("used", chosen("r1", "Line 1"), chosen("c1", "Line 1")),
+            cable("half", chosen("r2", "Line 2"), None),
+            cable("idle", chosen("r3", "Line 3"), chosen("c3", "Line 3")),
+        ];
+        let g = graph(serde_json::json!([
+            {"id": "a", "kind": "cable", "label": "a", "position": {"x": 0, "y": 0}, "cable": "used"},
+            {"id": "b", "kind": "cable", "label": "b", "position": {"x": 0, "y": 0}, "cable": "half"},
+            // an internal cable has no devices
+            {"id": "c", "kind": "cable", "label": "c", "position": {"x": 0, "y": 0}},
+            // not a cable node: its cable field means nothing
+            {"id": "d", "kind": "output", "label": "d", "position": {"x": 0, "y": 0}, "cable": "idle"}
+        ]));
+        let used: Vec<String> = cable_devices(&[g], &cables).into_iter().collect();
+        assert_eq!(used, ["c1", "r1", "r2"]);
+    }
 }

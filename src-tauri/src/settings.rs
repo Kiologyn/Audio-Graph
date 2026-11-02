@@ -66,33 +66,61 @@ impl Default for Settings {
 /// The system's interface language if the app has it; English otherwise
 fn system_language() -> Language {
     #[cfg(windows)]
-    {
-        // the low 10 bits of a LANGID are the primary language
-        let id = unsafe { windows::Win32::Globalization::GetUserDefaultUILanguage() };
-        match id & 0x3ff {
-            0x19 => return Language::Ru,
-            0x0a => return Language::Es,
-            0x04 => return Language::Zh,
-            0x11 => return Language::Ja,
-            _ => {}
-        }
-    }
+    let language = language_of_langid(unsafe { windows::Win32::Globalization::GetUserDefaultUILanguage() });
     #[cfg(not(windows))]
-    {
-        // the message language as gettext picks it: ru_RU.UTF-8 → ru
+    let language = {
+        // the message language as gettext picks it
         let locale = ["LC_ALL", "LC_MESSAGES", "LANG"]
             .iter()
             .find_map(|v| std::env::var(v).ok().filter(|l| !l.is_empty()))
             .unwrap_or_default();
-        match locale.get(..2) {
-            Some("ru") => return Language::Ru,
-            Some("es") => return Language::Es,
-            Some("zh") => return Language::Zh,
-            Some("ja") => return Language::Ja,
-            _ => {}
+        language_of_locale(&locale)
+    };
+    language.unwrap_or(Language::En)
+}
+
+/// The language of a Windows LANGID: its low 10 bits are the primary language
+#[cfg(windows)]
+fn language_of_langid(id: u16) -> Option<Language> {
+    match id & 0x3ff {
+        0x19 => Some(Language::Ru),
+        0x0a => Some(Language::Es),
+        0x04 => Some(Language::Zh),
+        0x11 => Some(Language::Ja),
+        _ => None,
+    }
+}
+
+/// The language of a POSIX locale: ru_RU.UTF-8 → ru
+#[cfg(not(windows))]
+fn language_of_locale(locale: &str) -> Option<Language> {
+    match locale.get(..2) {
+        Some("ru") => Some(Language::Ru),
+        Some("es") => Some(Language::Es),
+        Some("zh") => Some(Language::Zh),
+        Some("ja") => Some(Language::Ja),
+        _ => None,
+    }
+}
+
+/// Settings from the file. A value this version doesn't know (a newer version's language, say)
+/// resets only that setting, not all of them
+fn parse(text: &str) -> Settings {
+    use serde_json::Value;
+    let (Ok(Value::Object(file)), Ok(Value::Object(mut fields))) = (serde_json::from_str(text), serde_json::to_value(Settings::default()))
+    else {
+        return Settings::default();
+    };
+    for (key, value) in file {
+        let previous = fields.insert(key.clone(), value);
+        if serde_json::from_value::<Settings>(Value::Object(fields.clone())).is_err() {
+            match previous {
+                Some(v) => fields.insert(key, v),
+                None => fields.remove(&key),
+            };
         }
     }
-    Language::En
+    serde_json::from_value(Value::Object(fields)).unwrap_or_default()
 }
 
 pub struct SettingsStore {
@@ -103,10 +131,7 @@ pub struct SettingsStore {
 impl SettingsStore {
     pub fn new(data_dir: &Path) -> Self {
         let path = data_dir.join("preferences.json");
-        let current: Settings = fs::read_to_string(&path)
-            .ok()
-            .and_then(|t| serde_json::from_str(&t).ok())
-            .unwrap_or_default();
+        let current = fs::read_to_string(&path).map_or_else(|_| Settings::default(), |t| parse(&t));
         crate::i18n::set_language(current.language);
         Self {
             path,
@@ -139,4 +164,58 @@ pub fn settings_set(store: State<SettingsStore>, engine: State<Engine>, settings
     engine.settings_changed(&settings);
     *current = settings;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unknown_value_resets_only_its_setting() {
+        let s = parse(r#"{"theme":"dark","language":"de","disableIdleCables":true,"futureSetting":1}"#);
+        assert_eq!(s.theme, Theme::Dark);
+        assert_eq!(s.language, Settings::default().language);
+        assert!(s.disable_idle_cables);
+        // missing ones are the defaults
+        assert!(s.new_graph_volume && !s.hide_minimap);
+    }
+
+    #[test]
+    fn damaged_file_gives_the_defaults() {
+        for text in ["", "{", "[]", "null"] {
+            let s = parse(text);
+            assert_eq!((s.theme, s.disable_idle_cables), (Theme::System, false), "{text}");
+        }
+    }
+
+    #[test]
+    fn settings_survive_a_round_trip() {
+        let s = Settings {
+            theme: Theme::Light,
+            language: Language::Ja,
+            hide_minimap: true,
+            ..Settings::default()
+        };
+        let back = parse(&serde_json::to_string(&s).unwrap());
+        assert_eq!((back.theme, back.language, back.hide_minimap), (Theme::Light, Language::Ja, true));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn languages_of_windows() {
+        // ru-RU, es-MX, zh-TW, ja-JP, en-US, de-DE
+        let found: Vec<_> = [0x0419, 0x080a, 0x0404, 0x0411, 0x0409, 0x0407].map(language_of_langid).into();
+        let expected = [Some(Language::Ru), Some(Language::Es), Some(Language::Zh), Some(Language::Ja), None, None];
+        assert_eq!(found, expected);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn languages_of_locales() {
+        assert_eq!(language_of_locale("ru_RU.UTF-8"), Some(Language::Ru));
+        assert_eq!(language_of_locale("zh_CN"), Some(Language::Zh));
+        assert_eq!(language_of_locale("C.UTF-8"), None);
+        assert_eq!(language_of_locale("POSIX"), None);
+        assert_eq!(language_of_locale(""), None);
+    }
 }

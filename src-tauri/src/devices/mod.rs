@@ -63,7 +63,7 @@ pub fn list() -> Result<Vec<AudioDevice>, String> {
 }
 
 /// A chosen device in the list: the one with its id, or if the system no longer has that id
-/// (plugged into another USB port, another Bluetooth profile on Linux) the only device on
+/// (plugged into another USB port, another Bluetooth profile on Linux) the only active device
 /// of that direction with the same name. Matches findDevice in src/graph/devices.ts
 pub fn find<'a>(devices: &'a [AudioDevice], flow: Flow, id: &str, name: &str) -> Option<&'a AudioDevice> {
     if let Some(d) = devices.iter().find(|d| d.flow == flow && d.id == id) {
@@ -185,6 +185,30 @@ mod tests {
         }
     }
 
+    /// Makes VAC Line 1 the default microphone for a moment: KeepDefaults must put the old one back.
+    /// cargo test defaults_come_back -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    #[cfg(windows)]
+    fn defaults_come_back() {
+        use windows::Win32::Media::Audio::{eCapture, eConsole};
+        let before = win::default_id(eCapture, eConsole);
+        {
+            let _defaults = win::KeepDefaults::new();
+            let line = list()
+                .unwrap()
+                .into_iter()
+                .find(|d| d.name.starts_with("Line 1 (Virtual Audio Cable") && d.flow == Flow::Capture && d.state == DeviceState::Active)
+                .expect("VAC Line 1 must be on")
+                .id;
+            win::set_default(&line, eConsole).unwrap();
+            assert_eq!(win::default_id(eCapture, eConsole), Some(line));
+        }
+        println!("default microphone: {before:?}");
+        assert_eq!(win::default_id(eCapture, eConsole), before);
+    }
+
+    #[cfg(windows)]
     fn state_of(id: &str) -> Option<DeviceState> {
         list().ok()?.into_iter().find(|d| d.id == id).map(|d| d.state)
     }
@@ -194,7 +218,9 @@ mod tests {
     /// cargo test toggles_vac -- --ignored --nocapture
     #[test]
     #[ignore]
+    #[cfg(windows)]
     fn toggles_vac_capture() {
+        let _defaults = win::KeepDefaults::new();
         // only devices that are on: a cable turned off by the user stays off
         let vac: Vec<_> = list()
             .unwrap()

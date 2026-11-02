@@ -53,7 +53,7 @@ impl Tray {
 
     /// running: names of running graphs, opened: the one open in the window, opened_running: whether it runs
     pub fn update(&self, app: &AppHandle, running: &[String], opened: Option<&str>, opened_running: bool) {
-        let (text, enabled) = match opened {
+        let (text, enabled) = match opened.map(literal) {
             Some(name) if opened_running => (tr!("tray_stop_graph", name = name), true),
             Some(name) => (tr!("tray_start_graph", name = name), true),
             None => (tr!("start"), false),
@@ -79,10 +79,26 @@ impl Tray {
     }
 }
 
+/// A name in a menu item's text as it is: & there marks the letter of a keyboard shortcut (Windows, Linux)
+fn literal(name: &str) -> String {
+    name.replace('&', "&&")
+}
+
 pub fn show_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn graph_names_show_their_ampersands() {
+        assert_eq!(literal("Rock & Roll"), "Rock && Roll");
+        assert_eq!(literal("Music"), "Music");
     }
 }

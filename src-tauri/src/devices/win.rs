@@ -190,3 +190,31 @@ pub fn set_enabled(ids: &[String], enabled: bool) -> std::result::Result<(), Str
     }
     first_error.map_or(Ok(()), Err)
 }
+
+/// The system's default devices of every role, put back when dropped. Tests that turn devices off
+/// and on keep it: Windows moves the default away from a device turned off and doesn't move it back
+#[cfg(test)]
+pub struct KeepDefaults(Vec<(String, ERole)>);
+
+#[cfg(test)]
+impl KeepDefaults {
+    pub fn new() -> Self {
+        use windows::Win32::Media::Audio::{eCapture, eCommunications, eConsole, eMultimedia};
+        let roles = [eConsole, eMultimedia, eCommunications];
+        let defaults = [eRender, eCapture]
+            .into_iter()
+            .flat_map(|flow| roles.map(|role| default_id(flow, role).map(|id| (id, role))))
+            .flatten()
+            .collect();
+        Self(defaults)
+    }
+}
+
+#[cfg(test)]
+impl Drop for KeepDefaults {
+    fn drop(&mut self) {
+        for (id, role) in &self.0 {
+            let _ = set_default(id, *role);
+        }
+    }
+}

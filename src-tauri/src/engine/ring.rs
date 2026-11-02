@@ -115,6 +115,41 @@ mod tests {
     }
 
     #[test]
+    fn scaled_mix_ramps_each_channel_on_its_own() {
+        let (p, c) = ring(16);
+        p.push(&[1.0; 8]);
+        let mut out = [0.5; 8];
+        assert_eq!(c.mix_into_scaled(&mut out, [0.0, 1.0], [1.0, 0.0]), 8);
+        // over the 4 frames the left rises 0 → 1 and the right falls 1 → 0, added to what was there
+        let third = 1.0 / 3.0;
+        let expected = [0.5, 1.5, 0.5 + third, 1.5 - third, 1.5 - third, 0.5 + third, 1.5, 0.5];
+        assert!(out.iter().zip(expected).all(|(o, e)| (o - e).abs() < 1e-6), "{out:?}");
+        // an unchanged gain of one is a plain mix
+        p.push(&[2.0; 4]);
+        let mut out = [0.0; 4];
+        assert_eq!(c.mix_into_scaled(&mut out, [1.0; 2], [1.0; 2]), 4);
+        assert_eq!(out, [2.0; 4]);
+        // with less in the buffer than asked, the ramp ends with what there is
+        p.push(&[1.0; 2]);
+        let mut out = [0.0; 6];
+        assert_eq!(c.mix_into_scaled(&mut out, [0.0; 2], [0.5; 2]), 2);
+        assert_eq!(c.len(), 0);
+    }
+
+    #[test]
+    fn peek_and_skip_dont_lose_the_place() {
+        let (p, c) = ring(4);
+        p.push(&[1.0, 2.0, 3.0]);
+        c.skip(2);
+        p.push(&[4.0, 5.0]);
+        // 3 4 5, two of them past the buffer's end
+        assert_eq!([c.peek(0), c.peek(1), c.peek(2)], [3.0, 4.0, 5.0]);
+        let mut out = [0.0; 3];
+        assert_eq!(c.mix_into(&mut out), 3);
+        assert_eq!(out, [3.0, 4.0, 5.0]);
+    }
+
+    #[test]
     fn threads() {
         let (p, c) = ring(64);
         let writer = std::thread::spawn(move || {

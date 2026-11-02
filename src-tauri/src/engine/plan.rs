@@ -627,16 +627,14 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
         c.collect_sources(node, &engine_edges, &mut HashSet::new(), sink_volume, &mut sources);
         let Some(sink) = c.sink_device(node) else { continue };
         // a cable into itself: its input and output are one pair, sound would go round in circles.
-        // It also happens implicitly: "default" is now the cable's input because "System" set it
+        // It also happens implicitly: "default" is now the cable's input because "System" set it,
+        // or the system has no other output device and took the cable
         if let Some(cable) = cables.iter().find(|cb| device_id(&cb.render) == Some(sink.as_str())) {
             if let Some(capture) = cable_source(cable).filter(|id| sources.contains_key(id)) {
                 sources.remove(&capture);
                 let into: Vec<&str> = engine_edges.iter().filter(|e| e.target == node.id).map(|e| e.id.as_str()).collect();
                 let message = if matches!(c.role(node), Role::Output(Some(DeviceRef::Default))) {
-                    tr!(
-                        "issue_default_output_loop",
-                        cable = cable.name
-                    )
+                    tr!("issue_default_output_loop", cable = cable.name)
                 } else {
                     tr!("issue_cable_into_itself", cable = cable.name)
                 };
