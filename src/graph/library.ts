@@ -6,6 +6,7 @@ import { graphsApi } from "./api";
 import { useCables } from "./cables";
 import { edgesToDoc, nodesToDoc, type GraphDoc, type GraphMeta, type GraphPrefs } from "./doc";
 import { uniqueName } from "./names";
+import { inOrder } from "./sortable";
 import { starterGraphs, useGraph } from "./store";
 import type { AudioEdge, AudioNode } from "./types";
 
@@ -35,48 +36,31 @@ type LibraryState = {
 /** The file type of exported graphs in the file dialogs */
 const GRAPH_FILES = [{ name: "Audio Graph", extensions: ["json"] }];
 
+/** A graph's name as a file name: characters files can't have on Windows or Linux become "_" */
+export function fileName(name: string): string {
+  const clean = name
+    .replace(/[\\/:*?"<>|\p{Cc}]/gu, "_")
+    // Windows drops dots and spaces at the end of a name
+    .replace(/[. ]+$/, "")
+    .trim();
+  return clean || "graph";
+}
+
 /** Pause after the last change before writing to disk */
 const SAVE_DELAY_MS = 300;
 
 // ---------- autosave ----------
 
+/** The open graph as its file; updatedAt is set by Rust when it is written */
 function snapshot(): GraphDoc | null {
   const { meta, viewport, nodes, edges } = useGraph.getState();
   if (!meta) return null;
-  return {
-    version: 1,
-    id: meta.id,
-    name: meta.name,
-    createdAt: meta.createdAt,
-    updatedAt: 0,
-    viewport,
-    nodes: nodesToDoc(nodes),
-    edges: edgesToDoc(edges),
-    showVolume: meta.showVolume,
-    showDelay: meta.showDelay,
-    delayLimit: meta.delayLimit,
-    startOnLaunch: meta.startOnLaunch,
-    showBalance: meta.showBalance,
-  };
+  return { version: 1, updatedAt: 0, ...meta, viewport, nodes: nodesToDoc(nodes), edges: edgesToDoc(edges) };
 }
 
-// Content key: selection, node sizes and other transient state are not part of it,
+// Content key: the file holds no selection, node sizes or other transient state,
 // so their changes don't trigger a save
-const contentKey = (doc: GraphDoc | null) =>
-  doc
-    ? JSON.stringify([
-        doc.id,
-        doc.name,
-        doc.viewport,
-        doc.nodes,
-        doc.edges,
-        doc.showVolume,
-        doc.showDelay,
-        doc.delayLimit,
-        doc.startOnLaunch,
-        doc.showBalance,
-      ])
-    : "";
+const contentKey = (doc: GraphDoc | null) => (doc ? JSON.stringify(doc) : "");
 
 let savedKey = "";
 let timer: ReturnType<typeof setTimeout> | undefined;
@@ -128,17 +112,11 @@ useGraph.subscribe((state, prev) => {
 
 // ---------- library ----------
 
-const metaOf = ({ id, name, createdAt, updatedAt, showVolume, showBalance, showDelay, delayLimit, startOnLaunch }: GraphDoc): GraphMeta => ({
-  id,
-  name,
-  createdAt,
-  updatedAt,
-  showVolume,
-  showBalance,
-  showDelay,
-  delayLimit,
-  startOnLaunch,
-});
+/** The list entry of a graph: the file without its content */
+function metaOf(doc: GraphDoc): GraphMeta {
+  const { version: _version, viewport: _viewport, nodes: _nodes, edges: _edges, ...meta } = doc;
+  return meta;
+}
 
 /** A graph from the old autosave in localStorage (before files existed) */
 const LEGACY_KEY = "audio-graph:canvas";
@@ -254,8 +232,7 @@ export const useLibrary = create<LibraryState>()((set, get) => {
 
     reorder: (ids) =>
       guard(async () => {
-        const byId = new Map(get().graphs.map((g) => [g.id, g]));
-        set({ graphs: ids.flatMap((id) => byId.get(id) ?? []) });
+        set({ graphs: inOrder(get().graphs, ids) });
         await graphsApi.reorder(ids);
       }),
 
@@ -263,7 +240,7 @@ export const useLibrary = create<LibraryState>()((set, get) => {
     exportGraph: async (id) => {
       const graph = get().graphs.find((g) => g.id === id);
       if (!graph) return false;
-      const path = await saveDialog({ defaultPath: `${graph.name}.json`, filters: GRAPH_FILES });
+      const path = await saveDialog({ defaultPath: `${fileName(graph.name)}.json`, filters: GRAPH_FILES });
       if (!path) return false;
       // the open graph may have changes not yet on disk
       if (useGraph.getState().meta?.id === id) await flushSave();

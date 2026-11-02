@@ -57,7 +57,7 @@ function CalibrationDialog({ onClose }: { onClose: () => void }) {
   const meta = useGraph((s) => s.meta);
   const nodes = useGraph((s) => s.nodes);
   const edges = useGraph((s) => s.edges);
-  const setDelay = useGraph((s) => s.setDelay);
+  const setDelays = useGraph((s) => s.setDelays);
   const setPrefs = useLibrary((s) => s.setPrefs);
   const devices = useDevices((s) => s.devices);
   const loaded = useDevices((s) => s.loaded);
@@ -154,7 +154,7 @@ function CalibrationDialog({ onClose }: { onClose: () => void }) {
   };
 
   const apply = () => {
-    for (const [id, delay] of delays) setDelay(id, Math.max(delay, -MAX_DELAY_LIMIT));
+    setDelays(Object.fromEntries([...delays].map(([id, delay]) => [id, Math.max(delay, -MAX_DELAY_LIMIT)])));
     // the sliders must show the delays: turned on, the range wide enough
     const range = needed > limit ? Math.min(MAX_DELAY_LIMIT, Math.ceil(needed * 20) / 20) : limit;
     if (!meta.showDelay || range !== limit) setPrefs(meta.id, { showDelay: true, delayLimit: range });
@@ -173,7 +173,8 @@ function CalibrationDialog({ onClose }: { onClose: () => void }) {
         title={row.result.spread > UNSTEADY ? t("calibration_unsteady", { spread: ms(row.result.spread) }) : undefined}
       >
         {ms(row.result.latency)}
-        {delays.has(id) && <b>{secondsText(delays.get(id)!)}</b>}
+        {/* a single measurement has nothing to be compared with */}
+        {measured.length >= 2 && delays.has(id) && <b>{secondsText(delays.get(id)!)}</b>}
       </span>
     );
   };

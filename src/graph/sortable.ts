@@ -1,5 +1,18 @@
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent } from "react";
 
+/**
+ * Items in the order of the ids; items missing from the ids (added meanwhile) keep their order
+ * at the end, as the order is kept on disk (cables_reorder in cables.rs, the graph list in graphs.rs)
+ */
+export function inOrder<T extends { id: string }>(items: T[], ids: string[]): T[] {
+  const place = (id: string) => {
+    const i = ids.indexOf(id);
+    return i < 0 ? ids.length : i;
+  };
+  // the sort is stable: the missing ones stay in their order
+  return [...items].sort((a, b) => place(a.id) - place(b.id));
+}
+
 /** A row being dragged: where it came from, where it would land, how far the pointer moved */
 type Drag = { id: string; from: number; to: number; dy: number };
 

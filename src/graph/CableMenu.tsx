@@ -34,7 +34,7 @@ function PowerSwitch({ cable }: { cable: Cable }) {
   const setEnabled = useDevices((s) => s.setEnabled);
   const t = useT();
   const power = cablePower(cable, devices);
-  const busy = cableDeviceIds(cable).some((id) => pending.includes(id));
+  const busy = cableDeviceIds(cable, devices).some((id) => pending.includes(id));
   // a cable that is off or partly off turns fully on when clicked
   const enable = power !== "on";
 

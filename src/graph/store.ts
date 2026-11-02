@@ -46,6 +46,8 @@ type GraphState = {
   setApp: (id: string, app: AppRef | null) => void;
   setVolume: (id: string, volume: number) => void;
   setDelay: (id: string, delay: number) => void;
+  /** Delays of several outputs as one undo step (calibration) */
+  setDelays: (delays: Record<string, number>) => void;
   setBalance: (id: string, balance: number) => void;
   undo: () => void;
   redo: () => void;
@@ -284,6 +286,13 @@ export const useGraph = create<GraphState>()((set, get) => {
       record(`delay:${id}`);
       set({
         nodes: get().nodes.map((n) => (n.id === id ? { ...n, data: { ...n.data, delay } } : n)),
+      });
+    },
+
+    setDelays: (delays) => {
+      record();
+      set({
+        nodes: get().nodes.map((n) => (n.id in delays ? { ...n, data: { ...n.data, delay: delays[n.id] } } : n)),
       });
     },
 

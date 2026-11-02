@@ -1,8 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
-import type { AudioDevice } from "./devices";
+import { findDevice, type AudioDevice } from "./devices";
 import { t } from "../i18n";
 import { uniqueName } from "./names";
+import { inOrder } from "./sortable";
 import type { DeviceRef } from "./types";
 
 /** A cable is a pair of system devices shared by all graphs. Matches Cable in cables.rs. */
@@ -81,8 +82,7 @@ export const useCables = create<CablesState>()((set, get) => ({
   },
 
   reorder: (ids) => {
-    const byId = new Map(get().cables.map((c) => [c.id, c]));
-    set({ cables: ids.flatMap((id) => byId.get(id) ?? []) });
+    set({ cables: inOrder(get().cables, ids) });
     enqueue(() => invoke("cables_reorder", { ids }));
   },
 }));
@@ -105,9 +105,18 @@ export const useCablePanel = create<CablePanelState>()((set) => ({
   edit: (editing) => set({ editing }),
 }));
 
-/** The cable's system devices */
-export function cableDeviceIds(cable: Cable): string[] {
-  return [cable.render, cable.capture].flatMap((d) => (d?.type === "device" ? [d.id] : []));
+/**
+ * The cable's system devices. With the device list, as the engine finds them now: a device back
+ * under a new id is found by its name (findDevice)
+ */
+export function cableDeviceIds(cable: Cable, devices?: AudioDevice[]): string[] {
+  const sides = [
+    [cable.render, "render"],
+    [cable.capture, "capture"],
+  ] as const;
+  return sides.flatMap(([d, flow]) =>
+    d?.type === "device" ? [(devices && findDevice(d, flow, devices)?.id) || d.id] : [],
+  );
 }
 
 /** Device → name of the cable it belongs to */
@@ -160,7 +169,7 @@ export function cableMismatch(cable: Cable, devices: AudioDevice[]): { code: str
 export type CablePower = "on" | "off" | "mixed" | "none";
 
 export function cablePower(cable: Cable, devices: AudioDevice[]): CablePower {
-  const ids = new Set(cableDeviceIds(cable));
+  const ids = new Set(cableDeviceIds(cable, devices));
   const states = devices.filter((d) => ids.has(d.id)).map((d) => d.state);
   if (states.length === 0) return "none";
   if (states.every((s) => s === "active")) return "on";
@@ -170,7 +179,7 @@ export function cablePower(cable: Cable, devices: AudioDevice[]): CablePower {
 
 /** Cable devices to switch so that all of them become on (or off) */
 export function idsToToggle(cables: Cable[], devices: AudioDevice[], enabled: boolean): string[] {
-  const ids = new Set(cables.flatMap(cableDeviceIds));
+  const ids = new Set(cables.flatMap((c) => cableDeviceIds(c, devices)));
   const from = enabled ? "disabled" : "active";
   return devices.filter((d) => ids.has(d.id) && d.state === from).map((d) => d.id);
 }

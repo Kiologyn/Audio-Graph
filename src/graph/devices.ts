@@ -91,7 +91,7 @@ export const useDevices = create<DevicesState>()((set, get) => ({
 
 /**
  * A chosen device in the list: the one with its id, or if the system no longer has that id
- * (plugged into another USB port, another Bluetooth profile on Linux) the only device on
+ * (plugged into another USB port, another Bluetooth profile on Linux) the only active device
  * of that direction with the same name. Matches devices::find in Rust
  */
 export function findDevice(

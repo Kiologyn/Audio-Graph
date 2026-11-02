@@ -136,14 +136,17 @@ function SecondsField({
   title: string;
   onChange: (value: number) => void;
 }) {
-  const [draft, setDraft] = useState(String(value));
+  const language = useSettings((s) => s.language);
+  // shown with the language's decimal separator, like the sliders' values
+  const shown = (seconds: number) => new Intl.NumberFormat(language, { maximumFractionDigits: 3, useGrouping: false }).format(seconds);
+  const [draft, setDraft] = useState(() => shown(value));
   const t = useT();
-  useEffect(() => setDraft(String(value)), [value]);
+  useEffect(() => setDraft(shown(value)), [value, language]);
   const commit = () => {
-    // a comma is a decimal separator too
+    // either separator is accepted
     const n = Number(draft.trim().replace(",", "."));
     const next = Number.isFinite(n) && n > 0 ? Math.min(max, Math.max(0.001, Math.round(n * 1000) / 1000)) : value;
-    setDraft(String(next));
+    setDraft(shown(next));
     if (next !== value) onChange(next);
   };
   return (
@@ -161,7 +164,7 @@ function SecondsField({
           if (e.key === "Escape") {
             // Escape cancels the edit instead of closing the menu
             e.stopPropagation();
-            setDraft(String(value));
+            setDraft(shown(value));
           }
         }}
       />

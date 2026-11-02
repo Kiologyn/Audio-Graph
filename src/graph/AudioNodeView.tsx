@@ -20,12 +20,7 @@ function SystemDefaults() {
   const t = useT();
   const name = (flow: "render" | "capture") => devices.find((d) => d.flow === flow && d.isDefault)?.name ?? t("none");
   return (
-    <dl
-      className="ag-node__defaults"
-      title={t(
-        "system_node_hint",
-      )}
-    >
+    <dl className="ag-node__defaults" title={t("system_node_hint")}>
       <dt>{t("node_output")}</dt>
       <dd>{name("render")}</dd>
       <dt>{t("node_input")}</dt>
@@ -38,10 +33,7 @@ function SystemDefaults() {
 function VirtualCable({ label }: { label: string }) {
   const t = useT();
   return (
-    <div
-      className="ag-node__virtual"
-      title={t("virtual_cable_hint")}
-    >
+    <div className="ag-node__virtual" title={t("virtual_cable_hint")}>
       <span>{virtualDeviceName(label)}</span>
     </div>
   );
