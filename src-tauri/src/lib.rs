@@ -43,16 +43,17 @@ pub fn run() {
             log::init(&data_dir, &app.package_info().version.to_string());
             // settings first: they set the language of engine and tray messages
             let settings = settings::SettingsStore::new(&data_dir);
+            let prefs = settings.get();
             let graphs = graphs::GraphStore::new(data_dir.clone())?;
             let cables = cables::CableStore::new(&data_dir);
             let engine = engine::Engine::new(
                 app.handle().clone(),
                 data_dir.clone(),
                 cables.all().unwrap_or_default(),
-                &settings.get(),
+                &prefs,
             );
             // the graphs marked for it start with the app while it starts with the system
-            if settings.get().autostart {
+            if prefs.autostart {
                 match graphs.launch_graphs() {
                     Ok(list) => list.iter().for_each(|g| engine.start(g)),
                     Err(e) => log::write(format!("failed to start graphs at launch: {e}")),
@@ -66,28 +67,24 @@ pub fn run() {
             app.manage(settings);
             app.manage(cables);
             app.manage(engine);
-            // the app works without a tray: the icon is an extra, launching again also opens the window
-            let tray = match tray::Tray::new(app.handle()) {
-                Ok(tray) => {
-                    app.manage(tray);
-                    true
-                }
-                Err(e) => {
-                    log::write(format!("tray unavailable: {e}"));
-                    false
-                }
-            };
-            // started with the system the app waits in the tray; the window starts hidden for that
-            if !(autostart::launched() && tray) {
-                tray::show_window(app.handle());
+            app.manage(tray::TrayState::default());
+            tray::set(app.handle(), prefs.tray);
+            // started with the system the app waits in the tray, or minimized without one
+            match (autostart::launched(), tray::shown(app.handle())) {
+                (true, true) => {}
+                (true, false) => tray::show_minimized(app.handle()),
+                (false, _) => tray::show_window(app.handle()),
             }
             Ok(())
         })
-        // the close button and Alt+F4 hide the window to the tray: graphs keep running, quit from the tray menu
+        // with the tray the close button and Alt+F4 hide the window there: graphs keep running, quit from the tray menu;
+        // without it the window closes and the app quits with it
         .on_window_event(|window, event| {
             if let WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
+                if tray::shown(window.app_handle()) {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
             }
         })
         .invoke_handler(tauri::generate_handler![

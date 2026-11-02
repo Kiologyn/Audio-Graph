@@ -103,12 +103,30 @@ mod system {
             };
         }
         let exe = std::env::current_exe().map_err(err)?;
-        let text = format!(
-            "[Desktop Entry]\nType=Application\nName=Audio Graph\nExec=\"{}\" {FLAG}\nIcon=audio-graph\nTerminal=false\nX-GNOME-Autostart-enabled=true\n",
-            exe.display()
-        );
         fs::create_dir_all(path.parent().unwrap_or(&path)).map_err(err)?;
-        fs::write(&path, text).map_err(err)
+        fs::write(&path, entry_text(&exe)).map_err(err)
+    }
+
+    /// The autostart entry that starts exe in the tray
+    pub(super) fn entry_text(exe: &std::path::Path) -> String {
+        format!(
+            "[Desktop Entry]\nType=Application\nName=Audio Graph\nExec={} {FLAG}\nIcon=audio-graph\nTerminal=false\nX-GNOME-Autostart-enabled=true\n",
+            exec_quoted(&exe.to_string_lossy())
+        )
+    }
+
+    /// An Exec argument in quotes as the desktop entry spec has it: \ " ` $ escaped, % doubled
+    fn exec_quoted(arg: &str) -> String {
+        let mut quoted = String::from('"');
+        for c in arg.chars() {
+            match c {
+                '"' | '`' | '$' | '\\' => quoted.extend(['\\', c]),
+                '%' => quoted.push_str("%%"),
+                c => quoted.push(c),
+            }
+        }
+        quoted.push('"');
+        quoted
     }
 }
 
@@ -150,5 +168,29 @@ mod tests {
         assert!(enabled());
         system::set(false).unwrap();
         assert!(!enabled());
+    }
+}
+
+#[cfg(all(test, not(windows)))]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn packages_are_installed_and_home_folders_arent() {
+        assert!(installed(Path::new("/usr/bin/audio-graph")));
+        assert!(installed(Path::new("/opt/Audio Graph/audio-graph")));
+        assert!(!installed(Path::new("/home/me/Audio Graph 1.1.2.AppImage")));
+        assert!(!installed(Path::new("/usrlocal/audio-graph")));
+    }
+
+    #[test]
+    fn autostart_entry_starts_the_app_in_the_tray() {
+        let text = system::entry_text(Path::new("/usr/bin/audio-graph"));
+        assert!(text.starts_with("[Desktop Entry]\n"));
+        assert!(text.contains("\nExec=\"/usr/bin/audio-graph\" --autostart\n"), "{text}");
+        // the spec's special characters in a path
+        let text = system::entry_text(Path::new(r#"/opt/a "b" $c 100%/app"#));
+        assert!(text.contains(r#"Exec="/opt/a \"b\" \$c 100%%/app" --autostart"#), "{text}");
     }
 }

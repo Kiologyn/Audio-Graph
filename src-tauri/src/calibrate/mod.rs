@@ -115,9 +115,15 @@ fn device_id(device: &DeviceRef, flow: Flow) -> CmdResult<String> {
 
 /// One measurement: seconds from handing the sweep to the output until the microphone hears it
 fn measure_once(output: &str, mic: &str) -> CmdResult<f32> {
+    latency(|sound| play_and_record(output, mic, sound))
+}
+
+/// The latency of one measurement. play plays the sound and records meanwhile; it returns the recording
+/// and where in it, in samples, the sound's start was handed to the output
+fn latency(play: impl FnOnce(&[f32]) -> Result<(Vec<f32>, f64), String>) -> CmdResult<f32> {
     let signal = sweep();
     let sound: Vec<f32> = [silence(LEAD), signal.clone(), silence(TAIL)].concat();
-    let (recording, at) = play_and_record(output, mic, &sound)?;
+    let (recording, at) = play(&sound)?;
     let (onset, _) = find(&recording, &signal).ok_or_else(|| tr!("error_calibration_not_heard"))?;
     let expected = at + (LEAD * RATE as f32) as f64;
     Ok(((onset as f64 - expected) / RATE as f64) as f32)
@@ -209,6 +215,57 @@ mod tests {
     #[test]
     fn noise_alone_isnt_heard() {
         assert_eq!(find(&noise(RATE * 2, 0.2), &sweep()), None);
+    }
+
+    #[test]
+    fn sweep_is_found_clipped_and_off_center() {
+        let signal = sweep();
+        // a microphone overloaded to clipping, with a constant offset
+        let mut recording = vec![0.3; RATE];
+        for (i, s) in signal.iter().enumerate() {
+            recording[777 + i] += (4.0 * s).clamp(-1.0, 1.0);
+        }
+        assert_eq!(find(&recording, &signal).map(|f| f.0), Some(777));
+    }
+
+    #[test]
+    fn sweep_is_found_at_the_edges_of_the_recording() {
+        let signal = sweep();
+        let at_start: Vec<f32> = [signal.clone(), silence(0.5)].concat();
+        assert_eq!(find(&at_start, &signal).map(|f| f.0), Some(0));
+        let at_end: Vec<f32> = [silence(0.5), signal.clone()].concat();
+        assert_eq!(find(&at_end, &signal).map(|f| f.0), Some(RATE / 2));
+        // a recording too short to hold it
+        assert_eq!(find(&signal[..1000], &signal), None);
+    }
+
+    /// A pretend output and microphone: the recording started `before` seconds before the sound was handed
+    /// to the output (negative: after it), and the microphone hears the sound `latency` seconds after that
+    fn simulated(before: f64, latency: f64) -> impl FnOnce(&[f32]) -> Result<(Vec<f32>, f64), String> {
+        move |sound: &[f32]| {
+            let at = before * RATE as f64;
+            let shift = (at + latency * RATE as f64).round() as isize;
+            let mut recording = noise(sound.len() + RATE, 0.02);
+            for (i, s) in sound.iter().enumerate() {
+                if let Some(r) = recording.get_mut((i as isize + shift) as usize) {
+                    *r += 0.3 * s;
+                }
+            }
+            Ok((recording, at))
+        }
+    }
+
+    #[test]
+    fn latency_is_from_handing_over_to_hearing() {
+        for (before, expected) in [(0.25, 0.037), (0.0, 0.180), (-0.1, 0.250)] {
+            let measured = latency(simulated(before, expected)).unwrap();
+            assert!((measured as f64 - expected).abs() < 0.0005, "{before}: {measured} instead of {expected}");
+        }
+        // a microphone that hears nothing of it
+        let deaf = |sound: &[f32]| Ok((noise(sound.len() + RATE, 0.02), 0.0));
+        assert!(latency(deaf).is_err());
+        // a failing device is reported as it is
+        assert_eq!(latency(|_: &[f32]| Err("device busy".to_string())), Err("device busy".to_string()));
     }
 
     /// Two outputs heard by one "microphone" (a mix sink's monitor), one of them 200 ms later through

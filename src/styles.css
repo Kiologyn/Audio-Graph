@@ -792,7 +792,12 @@ button {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--ag-danger) 20%, transparent);
 }
 
+/* a stopped graph has no dot: its name stands right after the grip */
 .ag-graphs .ag-panel__name {
+  padding-left: 4px;
+}
+
+.ag-graphs__state + .ag-panel__name {
   padding-left: 9px;
 }
 

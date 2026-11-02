@@ -11,7 +11,7 @@ The graph above sends Spotify to the headphones and, at the same time, mixes it 
 - **Five kinds of nodes.** Input (microphone), Output (headphones, speakers), App, Cable, and System (the system's default devices).
 - **Per-app routing.** An app plays into the device on the right of its node and hears the device on the left. On Windows this is the same setting as *Volume mixer → app output/input device*; on Linux it is the app's streams being moved, like in pavucontrol.
 - **Cables.** A cable mixes everything that goes into it and passes it on. On Windows a cable is either a mix point inside the app or a pair of devices of a virtual cable driver. On Linux every cable node is a virtual device that the graph creates while it runs and that other programs can use too.
-- **Finding cables (Windows).** *Find cables* in the **Cables** menu adds the device pairs of installed virtual cable drivers, recognized by the drivers' device properties. A cable whose input and output belong to different driver lines gets a warning. A cable with only its input chosen still works for devices: the app records what is played into the input.
+- **Finding cables (Windows).** *Find cables* in the **Cables** menu adds the device pairs of installed virtual cable drivers, recognized by the drivers' device properties: Virtual Audio Cable lines (also with speaker pins or renamed devices), VB-Cable, its A–D cables and Hi-Fi Cable. Spare sides aren't offered as more cables but can be chosen: VB-Cable's 16-channel input and a VAC line's Mic and S/PDIF recording devices. Voicemeeter and VB-Audio Matrix aren't offered: they are mixers, and sound goes between their devices only the way they route it; a cable can still be made of their devices by hand. A cable whose input and output belong to different driver lines gets a warning. A cable with only its input chosen still works for devices: the app records what is played into the input.
 - **Volume on every node.** Devices and cables go from 0 to 200%; apps go up to 100% (their volume in the system mixer).
 - **Balance.** A left-right slider under the volume of inputs, cables and outputs, turned on per graph in its options. Like delay, it applies to sound that Audio Graph plays, not to an app or the System node connected straight to an output.
 - **Output delay.** A slider on Output nodes shifts their sound in time, for example to match speakers to Bluetooth headphones. Plus plays the output later, minus earlier than the other outputs (sound can't play early, so the other outputs are delayed instead). The range is ±0.5 s by default and up to ±1 s, in 1 ms steps. Only sound that Audio Graph plays can be delayed: an app or the System node connected straight to an output plays through the system, and the node says so.
@@ -21,9 +21,9 @@ The graph above sends Spotify to the headphones and, at the same time, mixes it 
 - **Problems are shown in place.** Missing devices, loops, an app connected to two outputs, conflicts between running graphs: the node gets a red note, the arrow turns red, and the header lists everything.
 - **Devices that come and go.** When a chosen device is unplugged, its node says so; when it is back, the graph picks it up within a moment. A device that comes back under another id (other USB port, another Bluetooth profile on Linux) is found by its name, as long as only one device has that name.
 - **Everything is put back.** When a graph stops or the app quits, apps get their previous devices and volumes, and the system gets its previous default devices. If the app is killed, this happens on the next start.
-- **Tray.** Closing the window hides it to the tray; graphs keep running. Start, stop and quit from the tray menu. Starting the app again shows the hidden window.
-- **Start with the system.** The installed app (not the portable file or the AppImage) can start in the tray when you sign in, and start the graphs marked in their options.
-- **Settings.** Light, dark or system theme; English, Russian, Spanish, Chinese or Japanese; hiding the graph map; volume sliders in new graphs; on Windows, turning the cables of a graph off while it isn't running.
+- **Tray.** Turned on in the settings: closing the window then hides it to the tray, and graphs keep running. Start, stop and quit from the tray menu. Starting the app again shows the hidden window. Without the tray, closing the window quits.
+- **Start with the system.** The installed app (not the portable file or the AppImage) can start when you sign in, in the tray or minimized, and start the graphs marked in their options.
+- **Settings.** Light, dark or system theme; the tray; English, Russian, Spanish, Chinese or Japanese; hiding the graph map; volume sliders in new graphs; on Windows, turning the cables of a graph off while it isn't running.
 
 ## Requirements
 
@@ -38,7 +38,7 @@ The graph above sends Spotify to the headphones and, at the same time, mixes it 
 - PipeWire with `pipewire-pulse` (Ubuntu 22.10+, Fedora 34+ and most current distributions) or PulseAudio.
 - `libpulse0` and WebKitGTK 4.1, which desktop distributions already have.
 - No cable driver is needed: cables are created by the graph.
-- The tray icon needs a tray in the desktop (on GNOME, the AppIndicator extension). Without it, quit from the settings menu.
+- The tray icon needs a tray in the desktop (on GNOME, the AppIndicator extension). If the tray is on in the settings but the desktop doesn't show it, quit from the settings menu.
 
 ## How it works
 
@@ -88,11 +88,16 @@ Here `npm version` only changes the number (see `.npmrc`): committing and taggin
 ### Tests
 
 ```sh
+npm test                       # the interface: graph files, undo, node problems, devices and cables, translations
+
 cd src-tauri
-cargo test                     # the graph planner, mixing buffers, translations
-cargo test -- --ignored        # Windows: tests on real devices, need Virtual Audio Cable and change device settings
+cargo test                     # the graph planner, storage, settings, mixing buffers, calibration, translations
+cargo test -- --ignored --test-threads=1   # Windows: tests on real devices, need Virtual Audio Cable lines 1 and 2 turned on
 cargo test engine::linux -- --ignored --test-threads=1   # Linux: tests on the audio server, need pactl, pacat and parec
+cargo test driver_properties -- --nocapture   # Windows: what drivers tell about the devices, to teach cable finding a new driver
 ```
+
+The Windows device tests play only into the cables, turn cable devices off and on for a moment, and put the system's default devices back afterwards.
 
 The app keeps its data in `%APPDATA%\dev.audiograph.app` on Windows and `~/.local/share/dev.audiograph.app` on Linux: graphs, cables, settings, the journal of changed app devices and default devices, and a log (`logs/audio-graph.log`).
 
@@ -107,6 +112,7 @@ The app keeps its data in `%APPDATA%\dev.audiograph.app` on Windows and `~/.loca
 | `src-tauri/src/engine/win/` | Executes the plan on Windows: audio streams (`streams.rs`) and Windows device settings (`router.rs`) |
 | `src-tauri/src/engine/linux.rs` | Executes the plan on Linux through the audio server (`src-tauri/src/pulse.rs`) |
 | `src-tauri/src/calibrate/` | Delay calibration: plays the sweep, records the microphone and finds the sweep in the recording |
+| `src-tauri/src/devices/pairs.rs` | Finds the two devices of each virtual cable by what the drivers tell about them (Windows) |
 | `src-tauri/src/` | Storage of graphs, cables and settings, device and app lists and their changes, autostart, the tray |
 
 ## Translations

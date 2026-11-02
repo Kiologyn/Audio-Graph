@@ -38,9 +38,12 @@ pub fn write(line: impl AsRef<str>) {
     }
 }
 
-/// UTC time as 2026-10-31 20:15:07
 fn timestamp() -> String {
-    let secs = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()) as i64;
+    utc(SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()) as i64)
+}
+
+/// Seconds since 1970 as UTC time: 2026-10-31 20:15:07 UTC
+fn utc(secs: i64) -> String {
     let (days, rest) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
     // days since 1970-01-01 to a date (Hinnant's algorithm)
     let z = days + 719_468;
@@ -69,13 +72,20 @@ fn system_version() -> String {
         let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
         Some(String::from_utf16_lossy(&buf[..len]))
     };
-    // Windows 11 still says "Windows 10" in ProductName, the build number is more exact
-    format!(
-        "{} {}, build {}",
-        read(w!("ProductName")).unwrap_or_default(),
-        read(w!("DisplayVersion")).unwrap_or_default(),
-        read(w!("CurrentBuild")).unwrap_or_default()
+    windows_version(
+        &read(w!("ProductName")).unwrap_or_default(),
+        &read(w!("DisplayVersion")).unwrap_or_default(),
+        &read(w!("CurrentBuild")).unwrap_or_default(),
     )
+}
+
+/// "Windows 11 Pro 24H2, build 26100". Windows 11 still says "Windows 10" in ProductName:
+/// builds from 22000 on are Windows 11
+#[cfg(windows)]
+fn windows_version(product: &str, display: &str, build: &str) -> String {
+    let eleven = build.parse::<u32>().is_ok_and(|b| b >= 22_000);
+    let product = if eleven { product.replacen("Windows 10", "Windows 11", 1) } else { product.to_string() };
+    format!("{product} {display}, build {build}")
 }
 
 /// Distribution, kernel and audio server: the engine's behavior depends on the server (PulseAudio or PipeWire)
@@ -95,4 +105,26 @@ fn system_version() -> String {
 #[cfg(not(any(windows, target_os = "linux")))]
 fn system_version() -> String {
     std::env::consts::OS.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn utc_dates() {
+        assert_eq!(utc(0), "1970-01-01 00:00:00 UTC");
+        assert_eq!(utc(951_782_400), "2000-02-29 00:00:00 UTC");
+        assert_eq!(utc(1_709_210_096), "2024-02-29 12:34:56 UTC");
+        assert_eq!(utc(1_793_538_687), "2026-11-01 13:11:27 UTC");
+        assert_eq!(utc(4_102_444_799), "2099-12-31 23:59:59 UTC");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_11_says_so() {
+        assert_eq!(windows_version("Windows 10 Pro", "26H2", "26300"), "Windows 11 Pro 26H2, build 26300");
+        assert_eq!(windows_version("Windows 10 Home", "22H2", "19045"), "Windows 10 Home 22H2, build 19045");
+        assert_eq!(windows_version("", "", ""), " , build ");
+    }
 }

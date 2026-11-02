@@ -405,3 +405,33 @@ impl Drop for Pulse {
         self.context.disconnect();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The volumes as amplitude factors, to a thousandth (the server keeps them on a cubic scale)
+    fn factors(v: &ChannelVolumes) -> Vec<f64> {
+        v.get().iter().map(|&v| (VolumeLinear::from(v).0 * 1000.0).round() / 1000.0).collect()
+    }
+
+    #[test]
+    fn balance_follows_channel_positions() {
+        let map = |s: &str| Map::new_from_string(s).unwrap();
+        assert_eq!(factors(&linear_balanced(&map("front-left,front-right"), [1.0, 0.25])), [1.0, 0.25]);
+        // 5.1: rear channels follow their side, center and LFE the louder side
+        let surround = map("front-left,front-right,front-center,lfe,rear-left,rear-right");
+        assert_eq!(factors(&linear_balanced(&surround, [0.5, 0.2])), [0.5, 0.2, 0.5, 0.5, 0.5, 0.2]);
+        // mono can't be balanced: the louder side
+        assert_eq!(factors(&linear_balanced(&map("mono"), [0.3, 0.9])), [0.9]);
+        // a negative gain is silence, not an error
+        assert_eq!(factors(&linear_balanced(&map("front-left,front-right"), [-1.0, 1.0])), [0.0, 1.0]);
+    }
+
+    #[test]
+    fn linear_volume_is_an_amplitude_factor() {
+        assert_eq!(factors(&linear(2, 0.5)), [0.5, 0.5]);
+        assert_eq!(factors(&linear(0, 1.0)), [1.0]);
+        assert_eq!(factors(&linear(1, 2.0)), [2.0]);
+    }
+}

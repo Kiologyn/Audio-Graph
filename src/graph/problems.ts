@@ -40,7 +40,7 @@ function nodeDevices(id: string, data: AudioNodeData, cables: Cable[], devices: 
         : data.kind === "cable"
           ? dynamicCables()
             ? virtualDeviceIds(id)
-            : cables.filter((c) => c.id === data.cable).flatMap(cableDeviceIds)
+            : cables.filter((c) => c.id === data.cable).flatMap((c) => cableDeviceIds(c, devices))
           : [];
   return ids.filter((id): id is string => !!id);
 }
@@ -115,7 +115,7 @@ export function allProblems(
     for (const e of status.streams.flatMap((s) => s.errors)) {
       if (!myDevices.has(e.device) || seen.has(e.device + e.message)) continue;
       seen.add(e.device + e.message);
-      list.push({ key: `device-${e.device}`, who: devices.find((d) => d.id === e.device)?.name ?? t("problem_device"), text: capitalize(e.message), level: "error" });
+      list.push({ key: `device-${e.device}-${e.message}`, who: devices.find((d) => d.id === e.device)?.name ?? t("problem_device"), text: capitalize(e.message), level: "error" });
     }
   }
   return list;

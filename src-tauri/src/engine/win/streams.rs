@@ -420,6 +420,7 @@ mod tests {
     #[ignore]
     fn device_comes_back() {
         let _com = ComGuard::init();
+        let _defaults = crate::devices::win::KeepDefaults::new();
         let line = |n: &str, flow: Flow| {
             list()
                 .unwrap()
@@ -481,19 +482,21 @@ mod tests {
         std::thread::sleep(Duration::from_millis(300));
         assert!(capture.error().is_none() && render.error().is_none(), "{:?} {:?}", capture.error(), render.error());
 
-        // a 440 Hz tone in 10 ms packets; the cable output is listened to all this time
+        // a 440 Hz tone, as much of it as the time passed asks for: a sleep lasts longer than asked,
+        // and fixed packets would come slower than a real recording; the cable output is listened to all this time
         let started = Instant::now();
         let (mut phase, mut onset, mut energy, mut count) = (0usize, None, [0.0f64; 2], 0usize);
         let mut buf = vec![0.0f32; RATE * CHANNELS];
         let delay = Duration::from_secs_f32(delay);
         while started.elapsed() < Duration::from_millis(1500) + delay {
-            let packet: Vec<f32> = (0..480)
+            let due = (started.elapsed().as_secs_f64() * RATE as f64) as usize;
+            let packet: Vec<f32> = (phase..due)
                 .flat_map(|i| {
-                    let s = 0.5 * (2.0 * std::f32::consts::PI * 440.0 * (phase + i) as f32 / RATE as f32).sin();
+                    let s = 0.5 * (2.0 * std::f32::consts::PI * 440.0 * i as f32 / RATE as f32).sin();
                     [s, s]
                 })
                 .collect();
-            phase += 480;
+            phase = due;
             tone.push(&packet);
             std::thread::sleep(Duration::from_millis(10));
             buf.fill(0.0);

@@ -58,12 +58,15 @@ export const useEngine = create<EngineState>()((set, get) => ({
   init: () => {
     if (initOnce) return;
     initOnce = true;
+    // the status asked for at the start is older than any that arrives with the event meanwhile
+    let received = false;
     listen<EngineStatus>("engine-status", (e) => {
+      received = true;
       set({ status: e.payload });
       // the engine may have changed the default devices: "System" and "default" nodes show them
       useDevices.getState().refresh();
     });
-    invoke<EngineStatus>("engine_status").then((status) => set({ status }));
+    invoke<EngineStatus>("engine_status").then((status) => received || set({ status }));
     // a device was plugged in or out, turned on or off: nodes show it at once
     listen("devices-changed", () => useDevices.getState().refresh());
   },

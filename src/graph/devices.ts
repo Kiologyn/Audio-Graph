@@ -13,7 +13,11 @@ export type AudioDevice = {
   isDefault: boolean;
   /** A cable device the graph created itself (Linux): nodes don't choose it */
   isVirtual: boolean;
-  /** The other side of the virtual cable this device belongs to, found by driver properties (Windows) */
+  /**
+   * The other side of the virtual cable this device belongs to, found by driver properties (Windows).
+   * A cable's main sides point to each other; a spare side points to the main one only:
+   * VB-Cable's 16-channel input, the Mic and S/PDIF recording devices of a VAC line
+   */
   pair: string | null;
   /** The name of that cable: "Line 1" */
   pairName: string | null;
@@ -91,7 +95,7 @@ export const useDevices = create<DevicesState>()((set, get) => ({
 
 /**
  * A chosen device in the list: the one with its id, or if the system no longer has that id
- * (plugged into another USB port, another Bluetooth profile on Linux) the only device on
+ * (plugged into another USB port, another Bluetooth profile on Linux) the only active device
  * of that direction with the same name. Matches devices::find in Rust
  */
 export function findDevice(

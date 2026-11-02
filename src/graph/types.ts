@@ -72,7 +72,7 @@ type KindMeta = {
   showDefaults?: boolean;
   /**
    * Maximum volume. Only the engine applies gain above 1; an app's volume
-   * is its volume in the system mixer, at most 100%. Without this field the node has no
+   * is its volume in the system mixer, at most 100%. Without this field the node has no volume slider
    */
   maxVolume?: number;
   /** The node has a delay slider (when the graph's delay sliders are on) */

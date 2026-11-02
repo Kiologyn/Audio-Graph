@@ -106,6 +106,7 @@ mod tests {
     #[test]
     #[ignore]
     fn reports_device_changes() {
+        let _defaults = crate::devices::win::KeepDefaults::new();
         let (tx, rx) = mpsc::channel();
         super::watch(move || {
             let _ = tx.send(());

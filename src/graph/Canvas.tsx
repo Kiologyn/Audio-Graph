@@ -10,7 +10,7 @@ import {
   type IsValidConnection,
   type XYPosition,
 } from "@xyflow/react";
-import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useT } from "../i18n";
 import { resolvedTheme, useSettings } from "../settings";
@@ -116,6 +116,19 @@ export function Canvas() {
     return () => window.removeEventListener("keydown", onKey);
   }, [menu]);
 
+  // a menu opened near the canvas edge moves inside it instead of being cut off; measured before it is shown
+  const menuBox = useRef<HTMLDivElement>(null);
+  const [place, setPlace] = useState<XYPosition | null>(null);
+  useLayoutEffect(() => {
+    const el = menuBox.current;
+    const box = wrapper.current;
+    if (!menu || !el || !box) return;
+    setPlace({
+      x: Math.max(4, Math.min(menu.x, box.clientWidth - el.offsetWidth - 4)),
+      y: Math.max(4, Math.min(menu.y, box.clientHeight - el.offsetHeight - 4)),
+    });
+  }, [menu]);
+
   // menu coordinates relative to the canvas container
   const local = (e: MouseEvent | ReactMouseEvent) => {
     const rect = wrapper.current!.getBoundingClientRect();
@@ -188,7 +201,12 @@ export function Canvas() {
       </ReactFlow>
 
       {menu && (
-        <div className="ag-menu" style={{ left: menu.x, top: menu.y }} onContextMenu={(e) => e.preventDefault()}>
+        <div
+          ref={menuBox}
+          className="ag-menu"
+          style={{ left: place?.x ?? menu.x, top: place?.y ?? menu.y }}
+          onContextMenu={(e) => e.preventDefault()}
+        >
           {menu.type === "pane" ? (
             <>
               <div className="ag-menu__title">{t("add_node")}</div>
