@@ -92,7 +92,8 @@ pub struct GraphNode {
     /// Volume: 1 is unchanged, 0 is silence, above 1 is gain (engine streams only)
     #[serde(default = "full_volume")]
     pub volume: f32,
-    /// An output's delay in seconds relative to the other outputs: plus plays later, minus earlier
+    /// Delay in seconds. An output's is relative to the other outputs: plus plays later, minus earlier;
+    /// a cable's holds back the sound passing through it (from 0)
     #[serde(default)]
     pub delay: f32,
     /// Left-right balance from -1 (left only) to 1 (right only); engine streams only
@@ -129,7 +130,7 @@ pub struct Graph {
     /// Files of older versions: whether delays were on. What was off stays without effect (upgraded)
     #[serde(default, skip_serializing)]
     pub show_delay: Option<bool>,
-    /// The delay sliders' range: from minus this many seconds to plus
+    /// The delay sliders' range: from minus this many seconds to plus (cables from 0)
     #[serde(default = "half_second")]
     pub delay_limit: f32,
     /// Start the graph when the app starts with the system

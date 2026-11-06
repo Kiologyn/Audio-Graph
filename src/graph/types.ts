@@ -43,7 +43,10 @@ export type AudioNodeData = {
   app: AppRef | null;
   /** Volume: 1 is unchanged, 0 is silence, above 1 is gain */
   volume: number;
-  /** An output's delay in seconds relative to the other outputs: plus plays later, minus earlier */
+  /**
+   * Delay in seconds. An output's is relative to the other outputs: plus plays later, minus earlier;
+   * a cable's holds back the sound passing through it (from 0)
+   */
   delay: number;
   /** Left-right balance from -1 (left only) to 1 (right only) */
   balance: number;
@@ -80,8 +83,11 @@ type KindMeta = {
    * is its volume in the system mixer, at most 100%. Without this field the node has no volume slider
    */
   maxVolume?: number;
-  /** The node has a delay slider */
-  delay?: boolean;
+  /**
+   * The node has a delay slider. relative: an output's, from minus the range to plus, relative
+   * to the other outputs; hold: a cable's, from 0, it only holds sound back
+   */
+  delay?: "relative" | "hold";
   /** The node has a balance slider: the engine's nodes, not apps */
   balance?: boolean;
 };
@@ -104,7 +110,7 @@ export const NODE_KINDS: Record<AudioNodeKind, KindMeta> = {
     sink: { placeholder: "placeholder_no_device", allowDefault: true },
     maxVolume: 2,
     balance: true,
-    delay: true,
+    delay: "relative",
   },
   app: {
     title: "node_app",
@@ -123,6 +129,7 @@ export const NODE_KINDS: Record<AudioNodeKind, KindMeta> = {
     pickCable: true,
     maxVolume: 2,
     balance: true,
+    delay: "hold",
   },
   system: {
     title: "node_system",

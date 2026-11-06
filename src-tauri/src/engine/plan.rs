@@ -70,8 +70,8 @@ pub struct Source {
     pub device: String,
     /// The product of node volumes along the path: input or cable, internal cables, output
     pub gain: Gain,
-    /// How much later the sound is played, in seconds. After compile it is the output node's
-    /// delay as set; apply_delays turns it into what the engine plays (never negative)
+    /// How much later the sound is played, in seconds. After compile it is the sum of the delays
+    /// on the path (cables, the output) as set; apply_delays turns it into what the engine plays (never negative)
     pub delay: f32,
 }
 
@@ -80,9 +80,17 @@ pub struct Source {
 pub struct Stream {
     pub sink: String,
     pub sources: Vec<Source>,
-    /// The device is an output node's: output delays apply to it. Sound into a cable isn't
-    /// delayed, otherwise the delay would reach every output behind the cable
+    /// The device is an output node's: output delays apply to it and shift with the other outputs.
+    /// An output's delay never goes into a cable, otherwise it would reach every output behind the cable
     pub output: bool,
+}
+
+impl Stream {
+    /// The stream's sources, each with its number among the sources of its device: one device
+    /// can come several times, delayed differently, and each time is a link of its own
+    pub fn layers(&self) -> impl Iterator<Item = (&Source, usize)> {
+        self.sources.iter().enumerate().map(|(i, s)| (s, self.sources[..i].iter().filter(|o| o.device == s.device).count()))
+    }
 }
 
 /// The system default devices the "System" node sets
@@ -191,6 +199,15 @@ enum Role<'a> {
     Deleted,
 }
 
+/// Where the engine holds back the sound passing through a cable from the list: on its links into the
+/// cable (everything that leaves the cable is late, apps listening to it too) or on its links out of it
+/// (everything that entered is late, apps playing into it too)
+#[derive(Clone, Copy, PartialEq)]
+enum Side {
+    Into,
+    OutOf,
+}
+
 struct Compiler<'a> {
     nodes: HashMap<&'a str, &'a GraphNode>,
     cables: HashMap<&'a str, &'a Cable>,
@@ -199,6 +216,8 @@ struct Compiler<'a> {
     issues: Vec<Issue>,
     /// The graph's delay slider range
     delay_limit: f32,
+    /// Where each cable from the list with a delay holds its sound back (place_cable_delays)
+    sides: HashMap<&'a str, Side>,
 }
 
 impl<'a> Compiler<'a> {
@@ -220,11 +239,54 @@ impl<'a> Compiler<'a> {
         balanced(node.volume, node.balance)
     }
 
-    /// A node's delay within the graph's slider range: only an output has one
+    /// The system carries out the links of apps and "System", not the engine
+    fn is_routed(&self, id: &str) -> bool {
+        matches!(self.nodes[id].kind, NodeKind::App | NodeKind::System)
+    }
+
+    /// A node's delay within the graph's slider range. An output's minus means earlier than
+    /// the other outputs; a cable only holds sound back. Other nodes have none
     fn delay(&self, node: &GraphNode) -> f32 {
         match node.kind {
             NodeKind::Output => node.delay.clamp(-self.delay_limit, self.delay_limit),
-            _ => 0.0,
+            NodeKind::Cable => node.delay.clamp(0.0, self.delay_limit),
+            NodeKind::Input | NodeKind::App | NodeKind::System => 0.0,
+        }
+    }
+
+    /// Where each cable from the list holds its sound back (Side). The engine delays only the sound it
+    /// carries itself: its links into the cable are taken unless an app or "System" plays into the
+    /// cable, then its links out of it. What the system carries between the cable and such a node
+    /// on the other side can't be delayed: that is an issue
+    fn place_cable_delays(&mut self, nodes: &'a [GraphNode], edges: &[&'a GraphEdge]) {
+        for node in nodes {
+            if !matches!(self.role(node), Role::Cable(_)) || self.delay(node) == 0.0 {
+                continue;
+            }
+            let (direct_in, engine_in): (Vec<&GraphEdge>, Vec<&GraphEdge>) =
+                edges.iter().copied().filter(|e| e.target == node.id).partition(|e| self.is_routed(&e.source));
+            let (direct_out, engine_out): (Vec<&GraphEdge>, Vec<&GraphEdge>) =
+                edges.iter().copied().filter(|e| e.source == node.id).partition(|e| self.is_routed(&e.target));
+            let (side, undelayed) = if !engine_in.is_empty() && direct_in.is_empty() {
+                (Some(Side::Into), Vec::new())
+            } else if !engine_out.is_empty() && direct_out.is_empty() {
+                (Some(Side::OutOf), Vec::new())
+            } else if !engine_in.is_empty() {
+                (Some(Side::Into), direct_in)
+            } else if !engine_out.is_empty() {
+                (Some(Side::OutOf), direct_out)
+            } else {
+                (None, [direct_in, direct_out].concat())
+            };
+            if let Some(side) = side {
+                self.sides.insert(node.id.as_str(), side);
+            }
+            if !undelayed.is_empty() {
+                let mut ids = vec![node.id.as_str()];
+                ids.extend(undelayed.iter().map(|e| if e.source == node.id { e.target.as_str() } else { e.source.as_str() }));
+                let links: Vec<&str> = undelayed.iter().map(|e| e.id.as_str()).collect();
+                self.issue(&ids, &links, tr!("issue_cable_delay_direct"));
+            }
         }
     }
 
@@ -334,26 +396,31 @@ impl<'a> Compiler<'a> {
     }
 
     /// Recording devices whose sound reaches the node through engine links (via internal cables),
-    /// with volume: gain is what the path has gathered so far, source node volumes multiply into it.
-    /// If there are several paths to a device, the loudest one counts: the sound isn't doubled
+    /// with volume and delay: gain and delay are what the path has gathered so far, source node volumes
+    /// multiply into the gain and cable delays add up. Each path is followed; if there are several
+    /// paths to a device, the sound isn't doubled: see mix_in
     fn collect_sources(
         &mut self,
         node: &'a GraphNode,
         engine_edges: &[&'a GraphEdge],
-        visited: &mut HashSet<&'a str>,
+        path: &mut HashSet<&'a str>,
         gain: Gain,
-        out: &mut BTreeMap<String, Gain>,
+        delay: f32,
+        out: &mut Mix,
     ) {
         for edge in engine_edges.iter().filter(|e| e.target == node.id) {
             let source = self.nodes[edge.source.as_str()];
             let gain = times(gain, self.gain(source));
             if matches!(self.role(source), Role::Bus) {
-                if visited.insert(source.id.as_str()) {
-                    self.collect_sources(source, engine_edges, visited, gain, out);
+                // an internal cable holds back everything that passes through it
+                if path.insert(source.id.as_str()) {
+                    let delay = delay + self.delay(source);
+                    self.collect_sources(source, engine_edges, path, gain, delay, out);
+                    path.remove(source.id.as_str());
                 }
             } else if let Some(id) = self.source_device(source) {
-                let g = out.entry(id).or_insert(gain);
-                *g = louder(*g, gain);
+                let held = if self.sides.get(source.id.as_str()) == Some(&Side::OutOf) { self.delay(source) } else { 0.0 };
+                mix_in(out, id, gain, delay + held);
             }
         }
     }
@@ -449,6 +516,7 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
         defaults: defaults.clone(),
         issues: Vec::new(),
         delay_limit: graph.delay_limit(),
+        sides: HashMap::new(),
     };
     let node_ids: Vec<&str> = graph.nodes.iter().map(|n| n.id.as_str()).collect();
     let mut edges: Vec<&GraphEdge> = graph
@@ -468,9 +536,6 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
         looped.extend(loop_edges);
     }
     edges.retain(|e| !looped.contains(e.id.as_str()));
-
-    // the system carries out these links, not the engine
-    let is_routed = |c: &Compiler, id: &str| matches!(c.nodes[id].kind, NodeKind::App | NodeKind::System);
 
     // apps and "System": each has one output device and one input device.
     // "System" goes first: it decides what "default" means for apps
@@ -609,10 +674,11 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
     let engine_edges: Vec<&GraphEdge> = edges
         .iter()
         .copied()
-        .filter(|e| !is_routed(&c, &e.source) && !is_routed(&c, &e.target))
+        .filter(|e| !c.is_routed(&e.source) && !c.is_routed(&e.target))
         .collect();
-    // device → (path volume, delay) per output device
-    let mut streams: BTreeMap<String, BTreeMap<String, (Gain, f32)>> = BTreeMap::new();
+    c.place_cable_delays(&graph.nodes, &edges);
+    // what is mixed per output device
+    let mut streams: BTreeMap<String, Mix> = BTreeMap::new();
     let mut outputs = BTreeSet::new();
     for node in &graph.nodes {
         let is_sink = matches!(c.role(node), Role::Output(_) | Role::Cable(_) | Role::Deleted);
@@ -621,17 +687,21 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
         }
         // a cable's volume applies to the sound taken from it, so a receiving cable doesn't multiply it in
         let sink_volume = if matches!(c.role(node), Role::Output(_)) { c.gain(node) } else { [1.0; 2] };
-        // only an output node delays: a cable passes its sound on at once
-        let delay = if matches!(c.role(node), Role::Output(_)) { c.delay(node) } else { 0.0 };
-        let mut sources = BTreeMap::new();
-        c.collect_sources(node, &engine_edges, &mut HashSet::new(), sink_volume, &mut sources);
+        // an output delays the sound it plays; a cable the sound going into it if it holds it back there
+        let delay = match c.role(node) {
+            Role::Output(_) => c.delay(node),
+            Role::Cable(_) if c.sides.get(node.id.as_str()) == Some(&Side::Into) => c.delay(node),
+            _ => 0.0,
+        };
+        let mut sources = Mix::new();
+        c.collect_sources(node, &engine_edges, &mut HashSet::new(), sink_volume, delay, &mut sources);
         let Some(sink) = c.sink_device(node) else { continue };
         // a cable into itself: its input and output are one pair, sound would go round in circles.
         // It also happens implicitly: "default" is now the cable's input because "System" set it,
         // or the system has no other output device and took the cable
         if let Some(cable) = cables.iter().find(|cb| device_id(&cb.render) == Some(sink.as_str())) {
-            if let Some(capture) = cable_source(cable).filter(|id| sources.contains_key(id)) {
-                sources.remove(&capture);
+            if let Some(capture) = cable_source(cable).filter(|id| sources.keys().any(|(device, _)| device == id)) {
+                sources.retain(|(device, _), _| *device != capture);
                 let into: Vec<&str> = engine_edges.iter().filter(|e| e.target == node.id).map(|e| e.id.as_str()).collect();
                 let message = if matches!(c.role(node), Role::Output(Some(DeviceRef::Default))) {
                     tr!("issue_default_output_loop", cable = cable.name)
@@ -645,7 +715,7 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
             outputs.insert(sink.clone());
         }
         let merged = streams.entry(sink).or_default();
-        for (device, gain) in sources {
+        for ((device, _), (gain, delay)) in sources {
             mix_in(merged, device, gain, delay);
         }
     }
@@ -659,36 +729,42 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
     }
 }
 
-/// Adds a source to an output device's sources. The same device on several paths sounds once:
-/// the loudest path counts, and the longest delay (nodes of one device delayed differently)
-fn mix_in(sources: &mut BTreeMap<String, (Gain, f32)>, device: String, gain: Gain, delay: f32) {
-    let (g, d) = sources.entry(device).or_insert((gain, delay));
+/// The sources of an output device: (device, delay in ms, the slider's step) → (volume, delay)
+type Mix = BTreeMap<(String, i32), (Gain, f32)>;
+
+/// Adds a source to an output device's sources. The same device on several paths with one delay
+/// sounds once: the loudest path counts. Paths delayed differently are separate layers of the sound
+fn mix_in(sources: &mut Mix, device: String, gain: Gain, delay: f32) {
+    let (g, _) = sources.entry((device, (delay * 1000.0).round() as i32)).or_insert((gain, delay));
     *g = louder(*g, gain);
-    *d = d.max(delay);
 }
 
-fn into_streams(streams: BTreeMap<String, BTreeMap<String, (Gain, f32)>>, outputs: &BTreeSet<String>) -> Vec<Stream> {
+fn into_streams(streams: BTreeMap<String, Mix>, outputs: &BTreeSet<String>) -> Vec<Stream> {
     streams
         .into_iter()
         .filter(|(_, sources)| !sources.is_empty())
         .map(|(sink, sources)| Stream {
             output: outputs.contains(&sink),
-            sources: sources.into_iter().map(|(device, (gain, delay))| Source { device, gain, delay }).collect(),
+            sources: sources.into_iter().map(|((device, _), (gain, delay))| Source { device, gain, delay }).collect(),
             sink,
         })
         .collect()
 }
 
-/// Output delays of running graphs as the engine plays them (compile has applied each graph's range).
-/// A delay is relative to the other outputs: minus means earlier, and since sound can't play earlier,
-/// all the other outputs of running graphs are delayed by as much instead. The first running plans go to the engine
+/// Delays of running graphs as the engine plays them (compile has applied each graph's range).
+/// An output's delay is relative to the other outputs: minus means earlier,
+/// and since sound can't play earlier, all the other outputs of running graphs are delayed by as much
+/// instead. Links into cables keep their delays: a cable only holds sound back. A link holds at most
+/// MAX_DELAY, more added up along internal cables is cut. The first running plans go to the engine
 pub fn apply_delays(plans: &mut [Plan], running: usize) {
     let count = running.min(plans.len());
-    let outputs = || plans[..count].iter().flat_map(|p| &p.streams).filter(|s| s.output);
-    let earliest = outputs().flat_map(|s| &s.sources).map(|s| s.delay).fold(0.0, f32::min);
-    for stream in plans[..count].iter_mut().flat_map(|p| &mut p.streams).filter(|s| s.output) {
+    let running = &mut plans[..count];
+    let outputs = running.iter().flat_map(|p| &p.streams).filter(|s| s.output);
+    let earliest = outputs.flat_map(|s| &s.sources).map(|s| s.delay).fold(0.0, f32::min);
+    for stream in running.iter_mut().flat_map(|p| &mut p.streams) {
+        let shift = if stream.output { earliest } else { 0.0 };
         for source in &mut stream.sources {
-            source.delay = (source.delay - earliest).min(MAX_DELAY);
+            source.delay = (source.delay - shift).min(MAX_DELAY);
         }
     }
 }
@@ -803,7 +879,7 @@ fn reaches(links: &HashMap<String, BTreeSet<String>>, from: &str, to: &str) -> b
 
 /// One plan for the engine from the plans of running graphs (after compile_all)
 pub fn merge(plans: &[Plan]) -> Plan {
-    let mut streams: BTreeMap<String, BTreeMap<String, (Gain, f32)>> = BTreeMap::new();
+    let mut streams: BTreeMap<String, Mix> = BTreeMap::new();
     let mut outputs = BTreeSet::new();
     for stream in plans.iter().flat_map(|p| &p.streams) {
         if stream.output {
@@ -1288,6 +1364,153 @@ mod tests {
         let plan = delays_of(&g, &[]);
         assert_eq!(plan.issues.len(), 1, "{:?}", plan.issues);
         assert_eq!(plan.issues[0].nodes, vec!["hp", "a"]);
+    }
+
+    #[test]
+    fn internal_cable_delays_add_up_on_the_way() {
+        // the microphone through two internal cables to the headphones: their delays and the output's add up
+        let g = graph(
+            vec![
+                input("mic", dev("mic")),
+                delayed(cable_node("a", None), 0.2),
+                delayed(cable_node("b", None), 0.1),
+                delayed(output("hp", dev("hp")), 0.05),
+            ],
+            &[("mic", "a"), ("a", "b"), ("b", "hp")],
+        );
+        assert_eq!(delays(&delays_of(&with_range(g.clone(), 0.5), &[])), vec![("hp", 0.35)]);
+        // the range cuts each delay, not their sum
+        assert_eq!(delays(&delays_of(&with_range(g, 0.15), &[])), vec![("hp", 0.3)]);
+    }
+
+    #[test]
+    fn cable_delay_only_holds_sound_back() {
+        // a cable can't send sound earlier: its minus is no delay
+        let g = graph(
+            vec![input("mic", dev("mic")), delayed(cable_node("a", None), -0.3), output("hp", dev("hp"))],
+            &[("mic", "a"), ("a", "hp")],
+        );
+        assert_eq!(delays(&delays_of(&with_range(g, 0.5), &[])), vec![("hp", 0.0)]);
+    }
+
+    /// Volume and delay of each source of the only stream
+    fn layers(plan: &Plan) -> Vec<(&str, Gain, f32)> {
+        plan.streams[0].sources.iter().map(|s| (s.device.as_str(), s.gain, (s.delay * 1000.0).round() / 1000.0)).collect()
+    }
+
+    /// A cable output's sound through two internal cables, each with its balance and delay, to two
+    /// output nodes of one device
+    fn two_paths(first: (f32, f32), second: (f32, f32)) -> Graph {
+        let path = |id: &str, (balance, delay): (f32, f32)| GraphNode { balance, delay, ..cable_node(id, None) };
+        graph(
+            vec![
+                input("mic", dev("mic")),
+                path("a", first),
+                path("b", second),
+                output("o1", dev("hp")),
+                output("o2", dev("hp")),
+            ],
+            &[("mic", "a"), ("mic", "b"), ("a", "o1"), ("b", "o2")],
+        )
+    }
+
+    #[test]
+    fn paths_of_one_device_delayed_differently_are_layers() {
+        // the left channel at once, the right one half a second later
+        let plan = delays_of(&two_paths((-1.0, 0.0), (1.0, 0.5)), &[]);
+        assert_eq!(layers(&plan), vec![("mic", [1.0, 0.0], 0.0), ("mic", [0.0, 1.0], 0.5)]);
+        let numbers: Vec<usize> = plan.streams[0].layers().map(|(_, n)| n).collect();
+        assert_eq!(numbers, vec![0, 1]);
+    }
+
+    #[test]
+    fn paths_of_one_device_with_one_delay_sound_once() {
+        // the sound isn't doubled: the loudest path counts in each channel
+        let plan = delays_of(&two_paths((-1.0, 0.2), (1.0, 0.2)), &[]);
+        assert_eq!(layers(&plan), vec![("mic", [1.0, 1.0], 0.2)]);
+    }
+
+    #[test]
+    fn layers_shift_with_the_other_outputs_and_survive_merging() {
+        let a = two_paths((-1.0, 0.0), (1.0, 0.1));
+        let mut b = graph(vec![input("m2", dev("m2")), delayed(output("spk", dev("spk")), -0.2)], &[("m2", "spk")]);
+        b = named(with_range(b, 0.5), "b");
+        let mut plans = compile_all(&[&a, &b], &[], &defaults());
+        apply_delays(&mut plans, 2);
+        assert_eq!(layers(&merge(&plans)), vec![("mic", [1.0, 0.0], 0.2), ("mic", [0.0, 1.0], 0.3)]);
+    }
+
+    #[test]
+    fn a_delayed_cable_into_itself_is_a_loop_on_every_layer() {
+        let mut g = two_paths((0.0, 0.0), (0.0, 0.3));
+        g.nodes[0] = cable_node("mic", Some("c"));
+        g.nodes[3] = output("o1", dev("c.in"));
+        g.nodes[4] = output("o2", dev("c.in"));
+        let plan = delays_of(&g, &[cable("c", "c.in", "c.out")]);
+        assert!(plan.streams.is_empty(), "{:?}", plan.streams);
+        assert!(plan.issues[0].message.starts_with("Loop: the audio of cable “c”"), "{:?}", plan.issues);
+    }
+
+    #[test]
+    fn cable_delay_holds_back_what_goes_into_it() {
+        // the microphone into a delayed cable: the headphones and the app listening to the cable get it later
+        let g = graph(
+            vec![input("mic", dev("mic")), delayed(cable_node("c", Some("c")), 0.25), output("hp", dev("hp")), app("call", "call.exe")],
+            &[("mic", "c"), ("c", "hp"), ("c", "call")],
+        );
+        let plan = delays_of(&with_range(g, 0.5), &[cable("c", "c.in", "c.out")]);
+        assert!(plan.issues.is_empty(), "{:?}", plan.issues);
+        assert_eq!(delays(&plan), vec![("c.in", 0.25), ("hp", 0.0)]);
+    }
+
+    #[test]
+    fn cable_delay_holds_back_what_comes_out_of_it_if_the_system_plays_into_it() {
+        // apps play into the cable through "System": the engine delays the cable's sound to the headphones
+        let g = graph(
+            vec![system("sys"), delayed(cable_node("c", Some("c")), 0.25), delayed(output("hp", dev("hp")), 0.1)],
+            &[("sys", "c"), ("c", "hp")],
+        );
+        let cables = [cable("c", "c.in", "c.out")];
+        let plan = delays_of(&with_range(g.clone(), 0.5), &cables);
+        assert!(plan.issues.is_empty(), "{:?}", plan.issues);
+        assert_eq!(delays(&plan), vec![("hp", 0.35)]);
+
+        // an app also listens to the cable: the system carries what it hears, without the delay
+        let mut g = g;
+        g.nodes.push(app("call", "call.exe"));
+        g.edges.push(GraphEdge { id: "c->call".into(), source: "c".into(), target: "call".into() });
+        let plan = delays_of(&with_range(g, 0.5), &cables);
+        assert_eq!(delays(&plan), vec![("hp", 0.35)]);
+        assert_eq!(plan.issues.len(), 1, "{:?}", plan.issues);
+        assert_eq!(plan.issues[0].nodes, vec!["c", "call"]);
+        assert_eq!(plan.issues[0].edges, vec!["c->call"]);
+    }
+
+    #[test]
+    fn cable_delay_cant_apply_to_what_only_the_system_carries() {
+        // an app into the cable and another listening to it: the engine has nothing to hold back
+        let g = graph(
+            vec![app("player", "player.exe"), delayed(cable_node("c", Some("c")), 0.25), app("call", "call.exe")],
+            &[("player", "c"), ("c", "call")],
+        );
+        let cables = [cable("c", "c.in", "c.out")];
+        let plan = delays_of(&g, &cables);
+        assert_eq!(plan.issues.len(), 1, "{:?}", plan.issues);
+        assert_eq!(plan.issues[0].nodes, vec!["c", "player", "call"]);
+        assert_eq!(plan.issues[0].edges, vec!["player->c", "c->call"]);
+    }
+
+    #[test]
+    fn virtual_cable_delay_holds_back_its_device() {
+        // as on Linux: an app plays into the cable's own device, the engine delays the cable's sound to the headphones
+        let g = graph(
+            vec![app("player", "player"), delayed(cable_node("mix", None), 0.2), output("phones", dev("hp"))],
+            &[("player", "mix"), ("mix", "phones")],
+        );
+        let (g, cables, _) = virtualize(&with_range(g, 0.5));
+        let plan = delays_of(&g, &cables);
+        assert!(plan.issues.is_empty(), "{:?}", plan.issues);
+        assert_eq!(delays(&plan), vec![("hp", 0.2)]);
     }
 
     #[test]

@@ -24,7 +24,7 @@ describe("graph file", () => {
     const nodes: DocNode[] = [
       docNode({ id: "o", sink: { type: "device", id: "spk", name: "Speakers" }, volume: 1.5, delay: -0.2, balance: 0.4 }),
       docNode({ id: "i", kind: "input", source: { type: "default" }, volume: 0.5, balance: -1 }),
-      docNode({ id: "c", kind: "cable", cable: "line-1", volume: 2, balance: 0.1, pinned: ["volume"] }),
+      docNode({ id: "c", kind: "cable", cable: "line-1", volume: 2, delay: 0.3, balance: 0.1, pinned: ["volume", "delay"] }),
       docNode({ id: "a", kind: "app", app: { exe: "player.exe", path: "C:\\player.exe", name: "Player" }, volume: 0.3 }),
       docNode({ id: "s", kind: "system" }),
     ];

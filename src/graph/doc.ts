@@ -20,7 +20,7 @@ export type GraphDoc = {
   viewport: Viewport | null;
   nodes: DocNode[];
   edges: DocEdge[];
-  /** The delay sliders' range: from minus this many seconds to plus */
+  /** The delay sliders' range: from minus this many seconds to plus (cables from 0) */
   delayLimit: number;
   /** Start the graph when the app starts with the system */
   startOnLaunch: boolean;
@@ -38,7 +38,7 @@ export type DocNode = {
   cable: string | null;
   app: AppRef | null;
   volume: number;
-  /** Output delay in seconds; the engine gets it with autosave */
+  /** Output or cable delay in seconds; the engine gets it with autosave */
   delay: number;
   /** Left-right balance, -1..1 */
   balance: number;

@@ -1,7 +1,7 @@
 //! A "recording device → output device" link: a buffer between their streams and latency
 //! adjustment. Device clocks run slightly differently, so the buffer's reserve slowly
 //! grows or shrinks; it is kept near the target by dropping or repeating one frame at a time.
-//! An output's delay is a bigger reserve: the sound waits in the buffer that much longer.
+//! A delay is a bigger reserve: the sound waits in the buffer that much longer.
 
 use super::plan::{Gain, MAX_DELAY};
 use super::ring::{ring, Consumer, Producer};
@@ -61,7 +61,7 @@ impl LinkReader {
         }
     }
 
-    /// The output's delay in seconds, at most plan::MAX_DELAY
+    /// The link's delay in seconds, at most plan::MAX_DELAY
     pub fn set_delay(&self, seconds: f32) {
         let frames = (seconds.clamp(0.0, MAX_DELAY) * RATE as f32).round() as u32;
         self.delay.store(frames, Ordering::Relaxed);

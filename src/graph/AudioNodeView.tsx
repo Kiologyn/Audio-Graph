@@ -120,16 +120,17 @@ function BalanceSlider({ id, value }: { id: string; value: number }) {
 }
 
 /**
- * An output's delay: from minus the range to plus, no delay in the middle. The engine gets it
- * with autosave: a delay change restarts the sound for a moment anyway, so there is no live sending.
- * Double-clicking the value resets it
+ * A node's delay. An output's goes from minus the range to plus, no delay in the middle; a cable's (hold)
+ * from no delay to plus. The engine gets it with autosave: a delay change restarts the sound for a moment
+ * anyway, so there is no live sending. Double-clicking the value resets it
  */
-function DelaySlider({ id, value, limit }: { id: string; value: number; limit: number }) {
+function DelaySlider({ id, value, limit, hold }: { id: string; value: number; limit: number; hold: boolean }) {
   const setDelay = useGraph((s) => s.setDelay);
   const language = useSettings((s) => s.language);
   const t = useT();
+  const min = hold ? 0 : -limit;
   // a delay beyond a narrowed range acts as the range's edge, in the engine too
-  const shown = Math.min(limit, Math.max(-limit, value));
+  const shown = Math.min(limit, Math.max(min, value));
   const seconds = (v: number, digits: number) =>
     t("delay_seconds", {
       value: new Intl.NumberFormat(language, {
@@ -138,19 +139,20 @@ function DelaySlider({ id, value, limit }: { id: string; value: number; limit: n
         signDisplay: "exceptZero",
       }).format(v),
     });
-  // where the knob is, 0..1: the fill goes from the middle to it, the value is written under it
-  const at = 0.5 + shown / limit / 2;
+  // where a value is on the slider, 0..1: the fill goes from no delay to the knob, the value is written under it
+  const position = (v: number) => (v - min) / (limit - min);
+  const [at, zero] = [position(shown), position(0)];
   return (
-    <div className="ag-delay nodrag" title={t("delay_hint")}>
-      <span className="ag-delay__edge">{seconds(-limit, 0)}</span>
+    <div className="ag-delay nodrag" title={t(hold ? "cable_delay_hint" : "delay_hint")}>
+      <span className="ag-delay__edge">{seconds(min, 0)}</span>
       <div className="ag-delay__slider" style={{ "--at": at } as CSSProperties}>
         <input
           type="range"
-          min={-limit * 1000}
+          min={min * 1000}
           max={limit * 1000}
           step={1}
           value={Math.round(shown * 1000)}
-          style={{ "--from": `${Math.min(at, 0.5) * 100}%`, "--to": `${Math.max(at, 0.5) * 100}%` } as CSSProperties}
+          style={{ "--from": `${Math.min(at, zero) * 100}%`, "--to": `${Math.max(at, zero) * 100}%` } as CSSProperties}
           onChange={(e) => setDelay(id, Number(e.currentTarget.value) / 1000)}
         />
         <span className={`ag-delay__value${shown !== 0 ? " is-set" : ""}`} onDoubleClick={() => setDelay(id, 0)}>
@@ -174,7 +176,7 @@ function SliderOf({ id, data, slider }: { id: string; data: AudioNode["data"]; s
   const delayLimit = useGraph((s) => s.meta?.delayLimit ?? 0.5);
   if (slider === "volume") return <VolumeSlider id={id} value={data.volume ?? 1} max={meta.maxVolume ?? 1} />;
   if (slider === "balance") return <BalanceSlider id={id} value={data.balance ?? 0} />;
-  return <DelaySlider id={id} value={data.delay ?? 0} limit={delayLimit} />;
+  return <DelaySlider id={id} value={data.delay ?? 0} limit={delayLimit} hold={meta.delay === "hold"} />;
 }
 
 /** The arrow in a node's corner: a menu with its sliders, each can be pinned to the node. A node without sliders has no arrow */

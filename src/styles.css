@@ -1395,7 +1395,7 @@ button {
   color: var(--accent);
 }
 
-/* an output's delay: no delay in the middle, the fill goes from it to the knob, the value is under the knob */
+/* a delay: the fill goes from no delay (an output's middle, a cable's left edge) to the knob, the value is under the knob */
 .ag-delay {
   display: flex;
   align-items: flex-start;

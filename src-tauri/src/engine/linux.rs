@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 /// The mark in our modules' arguments
 const MARK: &str = "audiograph";
 /// Loopback latency: with less, PulseAudio starts to stutter on weak machines.
-/// An output's delay is added to it: the loopback holds the sound that much longer
+/// A link's delay is added to it: the loopback holds the sound that much longer
 /// (measured: exact on PipeWire up to about 2 s; PulseAudio reaches it over the first seconds)
 const LATENCY_MS: u32 = 30;
 /// How often to retry what failed (no device, the server refused)
@@ -85,6 +85,10 @@ struct LoadedCable {
     source_module: u32,
 }
 
+/// Source, sink and the link's layer: one source can come into one sink several times,
+/// delayed differently (Stream::layers in the plan)
+type LinkKey = (String, String, usize);
+
 struct Link {
     module: u32,
     /// latency_msec it was loaded with: a changed delay means loading it again
@@ -138,7 +142,7 @@ pub struct Backend {
     /// Created cables: output device name → modules
     cables: BTreeMap<String, LoadedCable>,
     /// Loopbacks: (input device, output device) → module
-    links: BTreeMap<(String, String), Link>,
+    links: BTreeMap<LinkKey, Link>,
     /// What failed and why: don't retry more often than RETRY
     failed: HashMap<String, (Instant, String)>,
     /// Default devices the user chose (not our cables)
@@ -425,8 +429,8 @@ impl Backend {
     /// modules with a delay, and a cable with the same name may be needed right away (a rename)
     fn unload_cable(&mut self, sink: &str) {
         let Some(cable) = self.cables.remove(sink) else { return };
-        let attached: Vec<(String, String)> =
-            self.links.keys().filter(|(source, s)| *source == cable.source || s == sink).cloned().collect();
+        let attached: Vec<LinkKey> =
+            self.links.keys().filter(|(source, s, _)| *source == cable.source || s == sink).cloned().collect();
         let Some(p) = self.pulse.as_mut() else {
             self.links.retain(|key, _| !attached.contains(key));
             return;
@@ -693,14 +697,14 @@ impl Backend {
     /// Loopbacks between devices per the plan's streams
     fn apply_links(&mut self, plan: &Plan, snap: &Snapshot) -> Vec<StreamStatus> {
         // link → volume, latency
-        let mut wanted: BTreeMap<(String, String), (Gain, u32)> = BTreeMap::new();
+        let mut wanted: BTreeMap<LinkKey, (Gain, u32)> = BTreeMap::new();
         for stream in &plan.streams {
-            for source in &stream.sources {
+            for (source, layer) in stream.layers() {
                 let latency = LATENCY_MS + (source.delay * 1000.0).round() as u32;
-                wanted.insert((source.device.clone(), stream.sink.clone()), (source.gain, latency));
+                wanted.insert((source.device.clone(), stream.sink.clone(), layer), (source.gain, latency));
             }
         }
-        let unwanted: Vec<(String, String)> = self
+        let unwanted: Vec<LinkKey> = self
             .links
             .iter()
             .filter(|(k, link)| wanted.get(*k).is_none_or(|(_, latency)| *latency != link.latency))
@@ -714,11 +718,12 @@ impl Backend {
 
         let mut errors: HashMap<(String, String), DeviceError> = HashMap::new();
         let mut loaded_new: Vec<u32> = Vec::new();
-        for ((source, sink), &(_, latency)) in &wanted {
-            let key = (source.clone(), sink.clone());
-            if self.links.contains_key(&key) {
+        for (key, &(_, latency)) in &wanted {
+            let (source, sink, layer) = key;
+            if self.links.contains_key(key) {
                 continue;
             }
+            let pair = (source.clone(), sink.clone());
             // without devices the module won't load: a clear error right away
             let missing = if snap.device(Flow::Capture, source).is_none() {
                 Some(source)
@@ -728,12 +733,12 @@ impl Backend {
                 None
             };
             if let Some(device) = missing {
-                errors.insert(key, DeviceError { device: device.clone(), message: tr!("error_device_not_found") });
+                errors.insert(pair, DeviceError { device: device.clone(), message: tr!("error_device_not_found") });
                 continue;
             }
-            let retry_key = format!("link:{source}>{sink}");
+            let retry_key = format!("link:{source}>{sink}:{layer}");
             if let Err(message) = self.may_retry(&retry_key) {
-                errors.insert(key, DeviceError { device: sink.clone(), message });
+                errors.insert(pair, DeviceError { device: sink.clone(), message });
                 continue;
             }
             let args = format!(
@@ -743,12 +748,12 @@ impl Backend {
             match self.pulse().and_then(|p| p.load_module("module-loopback", &args)) {
                 Ok(module) => {
                     self.failed.remove(&retry_key);
-                    self.links.insert(key, Link { module, latency });
+                    self.links.insert(key.clone(), Link { module, latency });
                     loaded_new.push(module);
                 }
                 Err(e) => {
                     let message = self.fail(retry_key, tr!("error_connect_devices", error = e));
-                    errors.insert(key, DeviceError { device: sink.clone(), message });
+                    errors.insert(pair, DeviceError { device: sink.clone(), message });
                 }
             }
         }
@@ -1005,6 +1010,27 @@ mod tests {
         ticks(&mut backend, &Plan::default());
         assert!(our_modules().is_empty(), "{:?}", our_modules());
         assert!(!pactl(&["list", "short", "sinks"]).contains("audiograph.t1"));
+    }
+
+    #[test]
+    #[ignore]
+    fn layers_of_one_source_are_separate_loopbacks() {
+        let _devices = Devices::new();
+        let (mut backend, _) = backend();
+        let source = |gain, delay| Source { device: "agtest.mic.src".into(), gain, delay };
+        let plan = |sources| Plan {
+            streams: vec![PlanStream { output: true, sink: "agtest.out".into(), sources }],
+            ..Plan::default()
+        };
+        let loopbacks = || our_modules().into_iter().filter(|m| m.contains("module-loopback")).collect::<Vec<_>>();
+        ticks(&mut backend, &plan(vec![source([1.0, 0.0], 0.0), source([0.0, 1.0], 0.2)]));
+        let both = loopbacks();
+        assert_eq!(both.len(), 2, "{both:?}");
+        assert!(both.iter().any(|m| m.contains(&format!("latency_msec={} ", LATENCY_MS + 200))), "{both:?}");
+        ticks(&mut backend, &plan(vec![source([1.0, 1.0], 0.0)]));
+        assert_eq!(loopbacks().len(), 1);
+        ticks(&mut backend, &Plan::default());
+        assert!(our_modules().is_empty(), "{:?}", our_modules());
     }
 
     #[test]
