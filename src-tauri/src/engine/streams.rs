@@ -2,9 +2,9 @@
 //! that the platform provides (win/streams.rs, linux/streams.rs). Recording hands packets
 //! to all links, output mixes its links.
 
-use super::link::{link, LinkReader};
+use super::link::{capacity_for, link, LinkReader};
 use super::plan::{Gain, Stream, LOOPBACK_PREFIX};
-use super::ring::Producer;
+use super::ring::{ring, Producer};
 use super::{DeviceError, StreamStatus};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -146,6 +146,7 @@ impl Streams {
         }
         // volume and delay change on the fly without recreating the link
         for (&(source, sink, layer), &(gain, delay)) in &wanted {
+            self.fit_buffer((source, sink, layer), delay);
             let links = lock(&self.renders[sink].links);
             if let Some((_, reader)) = links.iter().find(|((s, l), _)| s == source && *l == layer) {
                 reader.set_gain(gain);
@@ -180,6 +181,24 @@ impl Streams {
                     .collect(),
             })
             .collect()
+    }
+
+    /// Gives a link the buffer its delay needs: a longer delay could never gather in a smaller one.
+    /// The buffer is made before taking the locks: the audio threads only wait for the sound to move
+    fn fit_buffer(&self, (source, sink, layer): (&str, &str, usize), delay: f32) {
+        let (capture, render) = (&self.captures[source], &self.renders[sink]);
+        let capacity = capacity_for(delay);
+        let reader = |(peer, _): &&(Peer, LinkReader)| peer.0 == source && peer.1 == layer;
+        if lock(&render.links).iter().find(reader).is_none_or(|(_, r)| r.capacity() == capacity) {
+            return;
+        }
+        let buffer = ring(capacity);
+        let (mut producers, mut readers) = (lock(&capture.links), lock(&render.links));
+        let producer = producers.iter_mut().find(|((s, l), _)| s == sink && *l == layer);
+        let reader = readers.iter_mut().find(|((s, l), _)| s == source && *l == layer);
+        if let (Some((_, producer)), Some((_, reader))) = (producer, reader) {
+            reader.resize(producer, buffer, delay);
+        }
     }
 
     pub fn retry_now(&mut self) {
@@ -246,6 +265,20 @@ mod tests {
         assert_eq!(links(&streams), (2, 2));
         streams.apply(&plan(vec![source([1.0, 1.0], 0.3)]));
         assert_eq!(links(&streams), (1, 1));
+        streams.shutdown();
+    }
+
+    /// The devices don't exist here either: only the link's buffer is looked at
+    #[test]
+    fn a_link_takes_the_memory_its_delay_needs() {
+        let mut streams = Streams::default();
+        let capacity = |streams: &Streams| lock(&streams.renders["no.sink"].links)[0].1.capacity();
+        streams.apply(&plan(vec![source([1.0; 2], 0.0)]));
+        assert_eq!(capacity(&streams), capacity_for(0.0));
+        streams.apply(&plan(vec![source([1.0; 2], 300.0)]));
+        assert_eq!(capacity(&streams), capacity_for(300.0));
+        streams.apply(&plan(vec![source([1.0; 2], 0.1)]));
+        assert_eq!(capacity(&streams), capacity_for(0.1));
         streams.shutdown();
     }
 }

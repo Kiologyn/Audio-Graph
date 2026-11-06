@@ -421,7 +421,7 @@ button {
 }
 
 .ag-graph-options__seconds input {
-  width: 52px;
+  width: 64px;
   padding: 3px 6px;
   border: 1px solid var(--ag-border);
   border-radius: 5px;

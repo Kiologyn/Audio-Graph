@@ -994,7 +994,7 @@ mod tests {
         samples.iter().position(|s| s.abs() > 0.05).map(|i| i as f32 / 48_000.0)
     }
 
-    /// The delay in the link's buffer
+    /// The delay in the link's buffer, also past what a server loopback could hold (about 2 s)
     #[test]
     #[ignore]
     fn delay_is_held_in_the_link() {
@@ -1008,7 +1008,7 @@ mod tests {
         settle();
         let plain = onset(&tone_through("agtest.mic", "agtest.out.monitor", 1.5)).expect("no sound");
         println!("without a delay the sound comes after {plain:.3} s");
-        for delay in [0.25, 1.5] {
+        for delay in [0.25, 5.0] {
             ticks(&mut backend, &plan(delay));
             // the link's reserve gathers from the moment the delay was set: what is playing now is silence
             std::thread::sleep(Duration::from_secs_f32(delay + 0.3));

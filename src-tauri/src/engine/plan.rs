@@ -124,8 +124,9 @@ pub struct VirtualCable {
 /// The prefix of virtual device names: it tells them apart from the system's devices
 pub const VIRTUAL_PREFIX: &str = "audiograph.";
 
-/// The most a link delays sound, in seconds: what its buffer is made for
-pub const MAX_DELAY: f32 = 2.0;
+/// The most a link delays sound, in seconds. A delay is held in the link's buffer, so only memory
+/// limits it: a second takes 384 KB, the longest delay about 460 MB
+pub const MAX_DELAY: f32 = 1200.0;
 
 /// A stream source "loopback:<output device>" is the sound played into that output device
 /// (WASAPI loopback). It stands in for the output of a cable that has only its input chosen

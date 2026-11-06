@@ -29,7 +29,7 @@ export type GraphDoc = {
 };
 
 /** The widest delay slider range, matches MAX_DELAY_LIMIT in graphs.rs */
-export const MAX_DELAY_LIMIT = 1;
+export const MAX_DELAY_LIMIT = 600;
 
 export type DocNode = {
   id: string;

@@ -620,7 +620,7 @@ mod tests {
         assert_eq!(g.delay_limit(), 0.5);
         g.delay_limit = 0.0;
         assert_eq!(g.delay_limit(), 0.001);
-        g.delay_limit = 10.0;
+        g.delay_limit = MAX_DELAY_LIMIT + 1.0;
         assert_eq!(g.delay_limit(), MAX_DELAY_LIMIT);
     }
 

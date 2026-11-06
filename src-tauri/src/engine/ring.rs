@@ -49,6 +49,23 @@ impl Consumer {
         r.written.load(Ordering::Acquire).wrapping_sub(r.read.load(Ordering::Relaxed))
     }
 
+    pub fn capacity(&self) -> usize {
+        self.0.data.len()
+    }
+
+    /// Hands everything in the buffer to another ring, as much as fits there. The writer of
+    /// this ring must wait meanwhile, or what it writes may be lost
+    pub fn move_to(&self, to: &Producer) {
+        let r = &*self.0;
+        let (start, n) = (r.read.load(Ordering::Relaxed) % r.data.len(), self.len());
+        let first = n.min(r.data.len() - start);
+        // an UnsafeCell<f32> is laid out as an f32, and the counters keep the writer out of this region
+        let values = |at: usize, n: usize| unsafe { std::slice::from_raw_parts(r.data.as_ptr().add(at) as *const f32, n) };
+        to.push(values(start, first));
+        to.push(values(0, n - first));
+        self.skip(n);
+    }
+
     /// Adds what it reads to out (mixing); returns how much was read
     pub fn mix_into(&self, out: &mut [f32]) -> usize {
         let r = &*self.0;
@@ -147,6 +164,19 @@ mod tests {
         let mut out = [0.0; 3];
         assert_eq!(c.mix_into(&mut out), 3);
         assert_eq!(out, [3.0, 4.0, 5.0]);
+    }
+
+    #[test]
+    fn moves_to_another_ring_in_order() {
+        let (p, c) = ring(4);
+        p.push(&[1.0, 2.0, 3.0]);
+        c.skip(2);
+        // 3 4 5, two of them past the buffer's end
+        p.push(&[4.0, 5.0]);
+        let (bigger, moved) = ring(8);
+        c.move_to(&bigger);
+        assert_eq!((c.len(), moved.len()), (0, 3));
+        assert_eq!([moved.peek(0), moved.peek(1), moved.peek(2)], [3.0, 4.0, 5.0]);
     }
 
     #[test]

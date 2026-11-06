@@ -1,7 +1,8 @@
 //! A "recording device → output device" link: a buffer between their streams and latency
 //! adjustment. Device clocks run slightly differently, so the buffer's reserve slowly
 //! grows or shrinks; it is kept near the target by playing a packet a frame longer or shorter.
-//! A delay is a bigger reserve: the sound waits in the buffer that much longer.
+//! A delay is a bigger reserve: the sound waits in the buffer that much longer, and the buffer
+//! grows with it (Streams::apply), so a link only takes the memory its delay needs.
 
 use super::plan::{Gain, MAX_DELAY};
 use super::ring::{ring, Consumer, Producer};
@@ -23,9 +24,17 @@ const SLACK: usize = ms(8);
 /// If more has piled up (for example, the output device restarted), the excess is dropped at once
 const MAX: usize = ms(120);
 
+/// How many values a link's buffer holds for a delay: the delay and a second for everything else.
+/// In steps of up to a third: dragging a delay slider must not move the buffer on every change
+pub fn capacity_for(seconds: f32) -> usize {
+    let needed = (seconds.max(0.0) + 1.0).ceil() as usize;
+    let step = (needed.next_power_of_two() / 4).max(1);
+    needed.div_ceil(step) * step * RATE * CHANNELS
+}
+
+/// A link without a delay
 pub fn link() -> (Producer, LinkReader) {
-    // the longest delay and a second for everything else
-    let (producer, consumer) = ring((RATE as f32 * (MAX_DELAY + 1.0)) as usize * CHANNELS);
+    let (producer, consumer) = ring(capacity_for(0.0));
     (
         producer,
         LinkReader {
@@ -67,6 +76,22 @@ impl LinkReader {
         self.delay.store(frames, Ordering::Relaxed);
     }
 
+    pub fn capacity(&self) -> usize {
+        self.ring.capacity()
+    }
+
+    /// Moves the link to a buffer made for this delay, and sets the delay: what the buffer holds
+    /// goes along, so the sound continues. Neither stream may run meanwhile
+    pub fn resize(&mut self, producer: &mut Producer, (writer, reader): (Producer, Consumer), delay: f32) {
+        self.set_delay(delay);
+        self.apply_delay();
+        // a smaller buffer keeps the newest sound
+        self.ring.skip(self.ring.len().saturating_sub(reader.capacity()));
+        self.ring.move_to(&writer);
+        *producer = writer;
+        self.ring = reader;
+    }
+
     /// Mixes the link's sound into out (frames of CHANNELS values)
     pub fn mix_into(&mut self, out: &mut [f32]) {
         let to: Gain = std::array::from_fn(|ch| f32::from_bits(self.gain[ch].load(Ordering::Relaxed)));
@@ -75,8 +100,8 @@ impl LinkReader {
         self.mix_frames(out, from, to);
     }
 
-    fn mix_frames(&mut self, out: &mut [f32], from: Gain, to: Gain) {
-        let need = out.len() / CHANNELS;
+    /// Brings the reserve to a changed delay; returns the delay in frames
+    fn apply_delay(&mut self) -> usize {
         let delay = self.delay.load(Ordering::Relaxed) as usize;
         if delay != self.applied_delay {
             if delay < self.applied_delay {
@@ -91,7 +116,12 @@ impl LinkReader {
             // the clock drift average starts over from the new reserve
             self.average = (self.ring.len() / CHANNELS) as f32;
         }
-        let target = TARGET + delay;
+        delay
+    }
+
+    fn mix_frames(&mut self, out: &mut [f32], from: Gain, to: Gain) {
+        let need = out.len() / CHANNELS;
+        let target = TARGET + self.apply_delay();
         let mut available = self.ring.len() / CHANNELS;
         if !self.primed {
             if available < target {
@@ -269,6 +299,52 @@ mod tests {
         reader.set_delay(0.0);
         assert_eq!(run(&mut reader, 100), 0);
         assert_eq!(reader.ring.len() / CHANNELS, reserve);
+    }
+
+    #[test]
+    fn buffer_fits_the_delay_in_steps() {
+        let seconds = |delay| capacity_for(delay) / (RATE * CHANNELS);
+        assert_eq!([0.0, 0.5, 1.0, 1.5, 3.0, 7.5, 600.0].map(seconds), [1, 2, 2, 3, 4, 12, 768]);
+    }
+
+    /// A steady stream through a link, packets of 10 ms; returns the frames of silence
+    fn run(producer: &Producer, reader: &mut LinkReader, packets: usize) -> usize {
+        let mut out = vec![0.0f32; 480 * CHANNELS];
+        let mut silent = 0;
+        for _ in 0..packets {
+            producer.push(&vec![0.5f32; 480 * CHANNELS]);
+            out.fill(0.0);
+            reader.mix_into(&mut out);
+            silent += out.iter().filter(|&&s| s == 0.0).count() / CHANNELS;
+        }
+        silent
+    }
+
+    #[test]
+    fn delay_longer_than_the_first_buffer_gathers() {
+        let (mut producer, mut reader) = link();
+        run(&producer, &mut reader, 100);
+        let reserve = reader.ring.len() / CHANNELS;
+        // 3 s don't fit the buffer of a link without a delay
+        reader.resize(&mut producer, ring(capacity_for(3.0)), 3.0);
+        assert_eq!(reader.ring.len() / CHANNELS, reserve);
+        let silent = run(&producer, &mut reader, 500);
+        assert!(silent.abs_diff(ms(3000)) <= 480, "{silent}");
+        assert_eq!(reader.ring.len() / CHANNELS, reserve + ms(3000));
+    }
+
+    #[test]
+    fn smaller_buffer_keeps_the_new_delay() {
+        let (mut producer, mut reader) = link();
+        reader.resize(&mut producer, ring(capacity_for(6.0)), 6.0);
+        run(&producer, &mut reader, 700);
+        let reserve = reader.ring.len() / CHANNELS;
+        assert_eq!(reserve + 480, TARGET + ms(6000));
+        // down to half a second: the sound goes on with that reserve, with no silence at all
+        reader.resize(&mut producer, ring(capacity_for(0.5)), 0.5);
+        assert_eq!(reader.capacity(), capacity_for(0.5));
+        assert_eq!(reader.ring.len() / CHANNELS + ms(5500), reserve);
+        assert_eq!(run(&producer, &mut reader, 100), 0);
     }
 
     #[test]
