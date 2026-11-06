@@ -1,5 +1,6 @@
+import { getVersion } from "@tauri-apps/api/app";
 import { ReactFlowProvider } from "@xyflow/react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { CableMenu } from "./graph/CableMenu";
 import { useCables } from "./graph/cables";
 import { Calibration } from "./graph/Calibration";
@@ -33,6 +34,15 @@ function SaveIndicator() {
   return <span className="ag-save">{t("saving")}</span>;
 }
 
+/** The app's version, the one in package.json */
+function Version() {
+  const [version, setVersion] = useState<string | null>(null);
+  useEffect(() => {
+    getVersion().then(setVersion, () => {});
+  }, []);
+  return version && <span className="ag-version">v{version}</span>;
+}
+
 export default function App() {
   const graphId = useGraph((s) => s.meta?.id);
 
@@ -63,6 +73,7 @@ export default function App() {
       )}
       <footer className="ag-statusbar">
         <SaveIndicator />
+        <Version />
       </footer>
       <Calibration />
     </div>
