@@ -177,6 +177,7 @@ export const useGraph = create<GraphState>()((set, get) => {
           name: doc.name,
           createdAt: doc.createdAt,
           delayLimit: doc.delayLimit ?? 0.5,
+          volumeLimit: doc.volumeLimit ?? 2,
           startOnLaunch: doc.startOnLaunch ?? false,
         },
         viewport: doc.viewport,

@@ -64,6 +64,9 @@ export type DeviceSlot = {
   allowDefault: boolean;
 };
 
+/** The widest volume limit of a graph; matches VOLUME_LIMITS in graphs.rs */
+export const MAX_VOLUME_LIMIT = 10;
+
 /** Texts are translation keys (i18n.ts) */
 type KindMeta = {
   title: string;
@@ -79,8 +82,9 @@ type KindMeta = {
   /** The node shows the current default devices */
   showDefaults?: boolean;
   /**
-   * Maximum volume. Only the engine applies gain above 1; an app's volume
-   * is its volume in the system mixer, at most 100%. Without this field the node has no volume slider
+   * The most volume the node can have; the graph's limit may be lower. Only the engine applies gain
+   * above 1; an app's volume is its volume in the system mixer, at most 100%. Without this field the node
+   * has no volume slider
    */
   maxVolume?: number;
   /**
@@ -99,7 +103,7 @@ export const NODE_KINDS: Record<AudioNodeKind, KindMeta> = {
     hasInput: false,
     hasOutput: true,
     source: { placeholder: "placeholder_no_device", allowDefault: true },
-    maxVolume: 2,
+    maxVolume: MAX_VOLUME_LIMIT,
     balance: true,
   },
   output: {
@@ -108,7 +112,7 @@ export const NODE_KINDS: Record<AudioNodeKind, KindMeta> = {
     hasInput: true,
     hasOutput: false,
     sink: { placeholder: "placeholder_no_device", allowDefault: true },
-    maxVolume: 2,
+    maxVolume: MAX_VOLUME_LIMIT,
     balance: true,
     delay: "relative",
   },
@@ -127,7 +131,7 @@ export const NODE_KINDS: Record<AudioNodeKind, KindMeta> = {
     hasOutput: true,
     // the device pair is set in the cable list, the node only refers to the cable
     pickCable: true,
-    maxVolume: 2,
+    maxVolume: MAX_VOLUME_LIMIT,
     balance: true,
     delay: "hold",
   },

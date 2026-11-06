@@ -216,6 +216,8 @@ struct Compiler<'a> {
     issues: Vec<Issue>,
     /// The graph's delay slider range
     delay_limit: f32,
+    /// The graph's maximum volume
+    volume_limit: f32,
     /// Where each cable from the list with a delay holds its sound back (place_cable_delays)
     sides: HashMap<&'a str, Side>,
 }
@@ -236,7 +238,12 @@ impl<'a> Compiler<'a> {
 
     /// What a node does to the sound passing through the engine: its volume and balance
     fn gain(&self, node: &GraphNode) -> Gain {
-        balanced(node.volume, node.balance)
+        balanced(self.volume(node), node.balance)
+    }
+
+    /// A node's volume within the graph's maximum: a limit lowered later acts on what was set before
+    fn volume(&self, node: &GraphNode) -> f32 {
+        node.volume.min(self.volume_limit)
     }
 
     /// The system carries out the links of apps and "System", not the engine
@@ -516,6 +523,7 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
         defaults: defaults.clone(),
         issues: Vec::new(),
         delay_limit: graph.delay_limit(),
+        volume_limit: graph.volume_limit(),
         sides: HashMap::new(),
     };
     let node_ids: Vec<&str> = graph.nodes.iter().map(|n| n.id.as_str()).collect();
@@ -573,9 +581,9 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
                 }
                 // "System" has no volume of its own to apply it through; an app has, up to 100%
                 if render.is_some() && target.kind == NodeKind::Output {
-                    if is_system && target.volume != 1.0 {
+                    if is_system && c.volume(target) != 1.0 {
                         c.issue(&[&target.id, &node.id], &[&edge.id], tr!("issue_volume_direct"));
-                    } else if !is_system && node.volume * target.volume > 1.0 {
+                    } else if !is_system && c.volume(node) * c.volume(target) > 1.0 {
                         c.issue(&[&target.id, &node.id], &[&edge.id], tr!("issue_volume_boost_direct"));
                     }
                 }
@@ -666,7 +674,7 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
         // the engine doesn't touch the sound of an app playing straight into an output node's device:
         // that node's volume is applied through the app's volume
         let output_volume = match outgoing.as_slice() {
-            [edge] if c.nodes[edge.target.as_str()].kind == NodeKind::Output => c.nodes[edge.target.as_str()].volume,
+            [edge] if c.nodes[edge.target.as_str()].kind == NodeKind::Output => c.volume(c.nodes[edge.target.as_str()]),
             _ => 1.0,
         };
         routes.push(AppRoute {
@@ -674,7 +682,7 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
             app: app.clone(),
             render,
             capture,
-            volume: (node.volume * output_volume).clamp(0.0, 1.0),
+            volume: (c.volume(node) * output_volume).clamp(0.0, 1.0),
         });
     }
 
@@ -985,6 +993,7 @@ mod tests {
                 .collect(),
             show_delay: None,
             delay_limit: 0.5,
+            volume_limit: 2.0,
             start_on_launch: false,
             show_balance: None,
         }
@@ -1225,6 +1234,23 @@ mod tests {
         let plan = compile(&g, &[], &defaults());
         assert_eq!(plan.issues.len(), 1);
         assert_eq!(plan.issues[0].nodes, ["o2", "a"]);
+    }
+
+    #[test]
+    fn volume_limit_cuts_every_node() {
+        let mut g = graph(
+            vec![GraphNode { volume: 1.8, ..input("mic", dev("mic")) }, GraphNode { volume: 0.8, ..output("o", dev("hp")) }],
+            &[("mic", "o")],
+        );
+        let gain = |g: &Graph| compile(g, &[], &defaults()).streams[0].sources[0].gain[0];
+        assert_eq!(gain(&g), 1.8 * 0.8);
+        g.volume_limit = 0.5;
+        assert_eq!(gain(&g), 0.5 * 0.5);
+        // and it can reach above the default maximum
+        g.nodes[0].volume = 4.0;
+        g.nodes[1].volume = 1.0;
+        g.volume_limit = 5.0;
+        assert_eq!(gain(&g), 4.0);
     }
 
     #[test]

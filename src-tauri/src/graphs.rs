@@ -26,6 +26,10 @@ fn half_second() -> f32 {
     0.5
 }
 
+fn twice_as_loud() -> f32 {
+    2.0
+}
+
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum NodeKind {
@@ -133,6 +137,9 @@ pub struct Graph {
     /// The delay sliders' range: from minus this many seconds to plus (cables from 0)
     #[serde(default = "half_second")]
     pub delay_limit: f32,
+    /// The volume sliders' maximum: 2 is 200%. An app's slider stops at 100% anyway
+    #[serde(default = "twice_as_loud")]
+    pub volume_limit: f32,
     /// Start the graph when the app starts with the system
     #[serde(default)]
     pub start_on_launch: bool,
@@ -145,10 +152,18 @@ pub struct Graph {
 /// into what a link can delay (plan::MAX_DELAY)
 pub const MAX_DELAY_LIMIT: f32 = crate::engine::plan::MAX_DELAY / 2.0;
 
+/// The volume limit's range: from 1% to 1000%
+const VOLUME_LIMITS: (f32, f32) = (0.01, 10.0);
+
 impl Graph {
     /// The delay slider range, within what the engine can do
     pub fn delay_limit(&self) -> f32 {
         self.delay_limit.clamp(0.001, MAX_DELAY_LIMIT)
+    }
+
+    /// The volume sliders' maximum, within its range
+    pub fn volume_limit(&self) -> f32 {
+        self.volume_limit.clamp(VOLUME_LIMITS.0, VOLUME_LIMITS.1)
     }
 
     /// A graph from a file of any version. Older versions could turn a graph's delays and balances
@@ -177,6 +192,7 @@ pub struct GraphMeta {
     pub created_at: u64,
     pub updated_at: u64,
     pub delay_limit: f32,
+    pub volume_limit: f32,
     pub start_on_launch: bool,
 }
 
@@ -188,6 +204,7 @@ impl From<&Graph> for GraphMeta {
             created_at: g.created_at,
             updated_at: g.updated_at,
             delay_limit: g.delay_limit,
+            volume_limit: g.volume_limit,
             start_on_launch: g.start_on_launch,
         }
     }
@@ -198,6 +215,7 @@ impl From<&Graph> for GraphMeta {
 #[serde(rename_all = "camelCase")]
 pub struct GraphPrefs {
     pub delay_limit: f32,
+    pub volume_limit: f32,
     pub start_on_launch: bool,
 }
 
@@ -361,6 +379,7 @@ pub fn graph_create(
         edges,
         show_delay: None,
         delay_limit: half_second(),
+        volume_limit: twice_as_loud(),
         start_on_launch: false,
         show_balance: None,
     };
@@ -403,6 +422,7 @@ pub fn graph_set_prefs(store: State<GraphStore>, engine: State<Engine>, id: Stri
     let _guard = store.lock.lock().map_err(err)?;
     let mut graph = store.read(&id)?;
     graph.delay_limit = prefs.delay_limit.clamp(0.001, MAX_DELAY_LIMIT);
+    graph.volume_limit = prefs.volume_limit.clamp(VOLUME_LIMITS.0, VOLUME_LIMITS.1);
     graph.start_on_launch = prefs.start_on_launch;
     graph.updated_at = now_ms();
     store.write(&graph)?;
@@ -586,7 +606,7 @@ mod tests {
         let g: Graph = serde_json::from_str(text).unwrap();
         assert_eq!(g.version, FORMAT_VERSION);
         assert!(!g.start_on_launch);
-        assert_eq!(g.delay_limit, 0.5);
+        assert_eq!((g.delay_limit, g.volume_limit), (0.5, 2.0));
         assert!(g.edges.is_empty() && g.viewport.is_none());
         let n = &g.nodes[0];
         assert_eq!((n.volume, n.delay, n.balance), (1.0, 0.0, 0.0));
@@ -602,6 +622,16 @@ mod tests {
         assert_eq!(g.delay_limit(), 0.001);
         g.delay_limit = 10.0;
         assert_eq!(g.delay_limit(), MAX_DELAY_LIMIT);
+    }
+
+    #[test]
+    fn volume_limit_stays_in_its_range() {
+        let mut g = graph("g", 1, false);
+        assert_eq!(g.volume_limit(), 2.0);
+        g.volume_limit = 0.0;
+        assert_eq!(g.volume_limit(), 0.01);
+        g.volume_limit = 100.0;
+        assert_eq!(g.volume_limit(), 10.0);
     }
 
     #[test]

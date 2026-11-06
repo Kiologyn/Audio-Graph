@@ -52,6 +52,7 @@ const doc = (id: string): GraphDoc => ({
   ],
   edges: [],
   delayLimit: 0.5,
+  volumeLimit: 2,
   startOnLaunch: false,
 });
 

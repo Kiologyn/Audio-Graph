@@ -27,6 +27,7 @@ const doc = (patch: Partial<GraphDoc> = {}): GraphDoc => ({
   ],
   edges: [],
   delayLimit: 0.5,
+  volumeLimit: 2,
   startOnLaunch: false,
   ...patch,
 });
@@ -136,7 +137,7 @@ describe("graph editing", () => {
   });
 
   it("reads the options of old files as they were", () => {
-    graph().loadDoc({ ...doc(), delayLimit: undefined, startOnLaunch: undefined } as unknown as GraphDoc);
-    expect(graph().meta).toMatchObject({ delayLimit: 0.5, startOnLaunch: false });
+    graph().loadDoc({ ...doc(), delayLimit: undefined, volumeLimit: undefined, startOnLaunch: undefined } as unknown as GraphDoc);
+    expect(graph().meta).toMatchObject({ delayLimit: 0.5, volumeLimit: 2, startOnLaunch: false });
   });
 });

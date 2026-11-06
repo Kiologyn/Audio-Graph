@@ -3,6 +3,7 @@ import { useT } from "../i18n";
 import { useSettings } from "../settings";
 import { useCalibration } from "./Calibration";
 import { MAX_DELAY_LIMIT, type GraphMeta } from "./doc";
+import { MAX_VOLUME_LIMIT } from "./types";
 import { useEngine } from "./engine";
 import { Icon } from "./icons";
 import { useLibrary } from "./library";
@@ -212,6 +213,20 @@ function GraphOptions({ graph, onExport }: { graph: GraphMeta; onExport: (result
                 unit={t("seconds_short")}
                 title={t("graph_delay_limit", { max: MAX_DELAY_LIMIT })}
                 onChange={(delayLimit) => setPrefs(graph.id, { delayLimit })}
+              />
+            </div>
+            <div className="ag-graph-options__row">
+              <span className="ag-graph-options__text">
+                {t("graph_volume_range")}
+                <small>{t("graph_volume_range_hint")}</small>
+              </span>
+              <LimitField
+                value={Math.round((graph.volumeLimit ?? 2) * 100)}
+                max={MAX_VOLUME_LIMIT * 100}
+                digits={0}
+                unit="%"
+                title={t("graph_volume_limit", { max: MAX_VOLUME_LIMIT * 100 })}
+                onChange={(percent) => setPrefs(graph.id, { volumeLimit: percent / 100 })}
               />
             </div>
             <label className={`ag-graph-options__check${autostart ? "" : " is-disabled"}`}>

@@ -22,6 +22,8 @@ export type GraphDoc = {
   edges: DocEdge[];
   /** The delay sliders' range: from minus this many seconds to plus (cables from 0) */
   delayLimit: number;
+  /** The volume sliders' maximum: 2 is 200% */
+  volumeLimit: number;
   /** Start the graph when the app starts with the system */
   startOnLaunch: boolean;
 };
@@ -50,7 +52,7 @@ export type DocNode = {
 export type DocEdge = { id: string; source: string; target: string };
 
 /** What the graph's options menu changes */
-export type GraphPrefs = Pick<GraphDoc, "delayLimit" | "startOnLaunch">;
+export type GraphPrefs = Pick<GraphDoc, "delayLimit" | "volumeLimit" | "startOnLaunch">;
 
 export type GraphMeta = Pick<GraphDoc, "id" | "name" | "createdAt" | "updatedAt"> & GraphPrefs;
 

@@ -14,6 +14,7 @@ import { Popover } from "./Popover";
 import { nodeNotes } from "./problems";
 import { useGraph } from "./store";
 import { NODE_KINDS, nodeSliders, type AudioNode, type NodeSlider } from "./types";
+import { totalVolume } from "./volume";
 
 /** The system's default devices now; while a graph with this node runs, it sets them */
 function SystemDefaults() {
@@ -131,35 +132,46 @@ function SliderValue({
   );
 }
 
-/** A node's volume slider */
-function VolumeSlider({ id, value, max }: { id: string; value: number; max: number }) {
+/** A node's volume slider with a mark at 100%. An output also shows its real volume if the way there changes it */
+function VolumeSlider({ id, value, max, output }: { id: string; value: number; max: number; output: boolean }) {
   const setVolume = useGraph((s) => s.setVolume);
+  const total = useGraph((s) => (output ? totalVolume(id, s.nodes, s.edges, s.meta?.volumeLimit ?? 2) : null));
   const send = useLiveSend((graphId, volume) => useEngine.getState().volume(graphId, id, volume));
   const t = useT();
   const change = (volume: number) => {
     setVolume(id, volume);
     send(volume);
   };
-  const percent = Math.round(value * 100);
+  // a volume beyond a lowered maximum acts as the maximum, in the engine too
+  const percent = Math.round(Math.min(value, max) * 100);
   return (
     <div className="ag-volume nodrag" title={t("volume_hint")}>
-      <input
-        type="range"
-        min={0}
-        max={max * 100}
-        step={1}
-        value={percent}
-        style={{ "--fill": `${(percent / (max * 100)) * 100}%` } as CSSProperties}
-        onChange={(e) => change(Number(e.currentTarget.value) / 100)}
-      />
+      <div
+        className={`ag-volume__track${max > 1 ? " has-mark" : ""}`}
+        style={{ "--mark": 1 / max, "--fill": `${(percent / (max * 100)) * 100}%` } as CSSProperties}
+      >
+        <input
+          type="range"
+          min={0}
+          max={max * 100}
+          step={1}
+          value={percent}
+          onChange={(e) => change(Number(e.currentTarget.value) / 100)}
+        />
+      </div>
       <SliderValue
         className={`ag-volume__value${percent > 100 ? " is-boost" : ""}`}
         draft={String(percent)}
         onChange={(typed) => change(Math.min(max, Math.max(0, Math.round(typed) / 100)))}
-        onReset={() => change(1)}
+        onReset={() => change(Math.min(1, max))}
       >
         {percent}%
       </SliderValue>
+      {total && (
+        <span className="ag-volume__total" title={t("volume_total_hint")}>
+          → {total}
+        </span>
+      )}
     </div>
   );
 }
@@ -261,7 +273,11 @@ const SLIDER_NAMES: Record<NodeSlider, string> = {
 function SliderOf({ id, data, slider }: { id: string; data: AudioNode["data"]; slider: NodeSlider }) {
   const meta = NODE_KINDS[data.kind];
   const delayLimit = useGraph((s) => s.meta?.delayLimit ?? 0.5);
-  if (slider === "volume") return <VolumeSlider id={id} value={data.volume ?? 1} max={meta.maxVolume ?? 1} />;
+  const volumeLimit = useGraph((s) => s.meta?.volumeLimit ?? 2);
+  if (slider === "volume") {
+    const max = Math.min(meta.maxVolume ?? 1, volumeLimit);
+    return <VolumeSlider id={id} value={data.volume ?? 1} max={max} output={data.kind === "output"} />;
+  }
   if (slider === "balance") return <BalanceSlider id={id} value={data.balance ?? 0} />;
   return <DelaySlider id={id} value={data.delay ?? 0} limit={delayLimit} hold={meta.delay === "hold"} />;
 }
