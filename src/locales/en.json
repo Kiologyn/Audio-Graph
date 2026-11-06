@@ -35,6 +35,8 @@
   "balance_right_short": "R",
   "balance_left": "L {percent}",
   "balance_right": "R {percent}",
+  "issue_volume_direct": "Volume doesn't apply here: “System” connected straight to an output plays through the system. Connect it through a cable",
+  "issue_volume_boost_direct": "Volume above 100% doesn't apply here: an app connected straight to an output plays through the system, which can't make it louder. Connect it through a cable",
   "issue_balance_direct": "Balance doesn't apply here: an app or “System” connected straight to an output plays through the system. Connect it through a cable",
   "delay_seconds": "{value} s",
   "calibration_title": "Calibrate delays",

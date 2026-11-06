@@ -35,6 +35,8 @@
   "balance_right_short": "右",
   "balance_left": "左 {percent}",
   "balance_right": "右 {percent}",
+  "issue_volume_direct": "此处不应用音量：直接连接到输出的“系统”通过系统播放。请通过线缆连接",
+  "issue_volume_boost_direct": "此处不应用超过 100% 的音量：直接连接到输出的应用通过系统播放，系统无法让它更响。请通过线缆连接",
   "issue_balance_direct": "此处不应用平衡：直接连接到输出的应用或“系统”通过系统播放。请通过线缆连接",
   "delay_seconds": "{value} 秒",
   "calibration_title": "校准延迟",

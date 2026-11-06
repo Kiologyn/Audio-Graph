@@ -35,6 +35,8 @@
   "balance_right_short": "R",
   "balance_left": "L {percent}",
   "balance_right": "R {percent}",
+  "issue_volume_direct": "ここでは音量は適用されません：出力に直接つないだ「システム」はシステム経由で再生されます。ケーブル経由でつないでください",
+  "issue_volume_boost_direct": "ここでは 100% を超える音量は適用されません：出力に直接つないだアプリはシステム経由で再生され、システムではこれ以上大きくできません。ケーブル経由でつないでください",
   "issue_balance_direct": "ここではバランスは適用されません：出力に直接つないだアプリや「システム」はシステム経由で再生されます。ケーブル経由でつないでください",
   "delay_seconds": "{value} 秒",
   "calibration_title": "遅延の自動調整",

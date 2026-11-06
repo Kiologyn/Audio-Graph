@@ -35,6 +35,8 @@
   "balance_right_short": "D",
   "balance_left": "I {percent}",
   "balance_right": "D {percent}",
+  "issue_volume_direct": "El volumen no se aplica aquí: «Sistema» conectado directamente a una salida suena a través del sistema. Conéctalo mediante un cable",
+  "issue_volume_boost_direct": "El volumen por encima del 100 % no se aplica aquí: una aplicación conectada directamente a una salida suena a través del sistema, que no puede subirlo más. Conéctala mediante un cable",
   "issue_balance_direct": "El balance no se aplica aquí: una aplicación o «Sistema» conectados directamente a una salida suenan a través del sistema. Conéctalos mediante un cable",
   "delay_seconds": "{value} s",
   "calibration_title": "Calibrar retardos",

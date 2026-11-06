@@ -571,6 +571,14 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
                 if render.is_some() && target.kind == NodeKind::Output && c.delay(target) != 0.0 {
                     c.issue(&[&target.id, &node.id], &[&edge.id], tr!("issue_delay_direct"));
                 }
+                // "System" has no volume of its own to apply it through; an app has, up to 100%
+                if render.is_some() && target.kind == NodeKind::Output {
+                    if is_system && target.volume != 1.0 {
+                        c.issue(&[&target.id, &node.id], &[&edge.id], tr!("issue_volume_direct"));
+                    } else if !is_system && node.volume * target.volume > 1.0 {
+                        c.issue(&[&target.id, &node.id], &[&edge.id], tr!("issue_volume_boost_direct"));
+                    }
+                }
                 render
             }
             many => {
@@ -1217,6 +1225,33 @@ mod tests {
         let plan = compile(&g, &[], &defaults());
         assert_eq!(plan.issues.len(), 1);
         assert_eq!(plan.issues[0].nodes, ["o2", "a"]);
+    }
+
+    #[test]
+    fn output_volume_the_system_cant_apply() {
+        let louder = |volume: f32, source: GraphNode| {
+            let id = source.id.clone();
+            let g = graph(vec![source, GraphNode { volume, ..output("o", dev("hp")) }], &[(id.as_str(), "o")]);
+            compile(&g, &[], &defaults()).issues
+        };
+        // "System" plays through the system, the output's volume has nothing to go through
+        assert!(louder(1.0, system("s")).is_empty());
+        for volume in [0.5, 1.5] {
+            let issues = louder(volume, system("s"));
+            assert_eq!(issues.len(), 1, "{issues:?}");
+            assert_eq!(issues[0].nodes, vec!["o", "s"]);
+            assert_eq!(issues[0].edges, vec!["s->o"]);
+        }
+        // an app's volume in the mixer carries the output's volume up to 100%
+        assert!(louder(0.5, app("a", "a.exe")).is_empty());
+        assert_eq!(louder(1.5, app("a", "a.exe")).len(), 1);
+        assert!(louder(1.5, GraphNode { volume: 0.5, ..app("a", "a.exe") }).is_empty());
+        // through a cable the engine plays it
+        let g = graph(
+            vec![system("s"), cable_node("c", Some("c")), GraphNode { volume: 1.5, ..output("o", dev("hp")) }],
+            &[("s", "c"), ("c", "o")],
+        );
+        assert!(compile(&g, &[cable("c", "c.in", "c.out")], &defaults()).issues.is_empty());
     }
 
     fn named(mut g: Graph, id: &str) -> Graph {
