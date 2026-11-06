@@ -1341,8 +1341,22 @@ button {
   margin-top: 8px;
 }
 
-.ag-volume input,
-.ag-delay input {
+/* a slider's value being typed */
+.ag-slider-value {
+  width: 44px;
+  padding: 0 3px;
+  border: 1px solid var(--ag-focus);
+  border-radius: 3px;
+  outline: none;
+  background: var(--ag-surface-2);
+  color: var(--ag-text);
+  font: inherit;
+  text-align: right;
+  user-select: text;
+}
+
+.ag-volume input[type="range"],
+.ag-delay input[type="range"] {
   flex: 1;
   min-width: 0;
   height: 4px;
@@ -1353,8 +1367,8 @@ button {
   cursor: pointer;
 }
 
-.ag-volume input::-webkit-slider-thumb,
-.ag-delay input::-webkit-slider-thumb {
+.ag-volume input[type="range"]::-webkit-slider-thumb,
+.ag-delay input[type="range"]::-webkit-slider-thumb {
   width: 12px;
   height: 12px;
   appearance: none;
@@ -1380,7 +1394,7 @@ button {
 }
 
 /* the slider takes what is left: its own width would make the node wider than the volume row */
-.ag-balance input {
+.ag-balance input[type="range"] {
   width: 0;
 }
 
@@ -1411,7 +1425,7 @@ button {
   padding-top: 4px;
 }
 
-.ag-delay__slider input {
+.ag-delay__slider input[type="range"] {
   display: block;
   width: 100%;
 }
@@ -1426,8 +1440,8 @@ button {
   user-select: none;
 }
 
-.ag-delay input,
-.ag-balance input {
+.ag-delay input[type="range"],
+.ag-balance input[type="range"] {
   background: linear-gradient(
     to right,
     var(--ag-surface-2) var(--from),

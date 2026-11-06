@@ -1,5 +1,5 @@
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import { memo, useMemo, useRef, useState, type CSSProperties } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useT } from "../i18n";
 import { dynamicCables, virtualDeviceName } from "../platform";
 import { useSettings } from "../settings";
@@ -59,7 +59,79 @@ function useLiveSend(send: (graphId: string, value: number) => void) {
   };
 }
 
-/** A node's volume slider. Double-clicking the percentage resets it to 100% */
+/** Longer than this between two clicks on a value is not a double click */
+const DOUBLE_CLICK_MS = 250;
+
+/**
+ * A slider's value: a click opens it for typing, a double click resets it. Enter or leaving the field
+ * applies the number, Escape cancels. draft is what the field starts with; a unit or a sign may be typed along
+ */
+function SliderValue({
+  className,
+  draft,
+  onChange,
+  onReset,
+  children,
+}: {
+  className: string;
+  draft: string;
+  onChange: (value: number) => void;
+  onReset: () => void;
+  children: ReactNode;
+}) {
+  const [text, setText] = useState<string | null>(null);
+  const click = useRef<number | null>(null);
+  useEffect(() => () => void (click.current !== null && clearTimeout(click.current)), []);
+  const commit = () => {
+    const digits = (text ?? "").replace(",", ".").replace(/[^\d.+-]/g, "");
+    const value = Number(digits);
+    setText(null);
+    if (digits !== "" && Number.isFinite(value)) onChange(value);
+  };
+  if (text !== null) {
+    return (
+      <span className={className}>
+        <input
+          className="ag-slider-value nodrag"
+          autoFocus
+          value={text}
+          onFocus={(e) => e.currentTarget.select()}
+          onChange={(e) => setText(e.currentTarget.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit();
+            if (e.key === "Escape") {
+              // Escape cancels the typing instead of closing the menu
+              e.stopPropagation();
+              setText(null);
+            }
+          }}
+        />
+      </span>
+    );
+  }
+  return (
+    <span
+      className={className}
+      onClick={() => {
+        if (click.current !== null) return;
+        click.current = window.setTimeout(() => {
+          click.current = null;
+          setText(draft);
+        }, DOUBLE_CLICK_MS);
+      }}
+      onDoubleClick={() => {
+        if (click.current !== null) clearTimeout(click.current);
+        click.current = null;
+        onReset();
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+/** A node's volume slider */
 function VolumeSlider({ id, value, max }: { id: string; value: number; max: number }) {
   const setVolume = useGraph((s) => s.setVolume);
   const send = useLiveSend((graphId, volume) => useEngine.getState().volume(graphId, id, volume));
@@ -80,9 +152,14 @@ function VolumeSlider({ id, value, max }: { id: string; value: number; max: numb
         style={{ "--fill": `${(percent / (max * 100)) * 100}%` } as CSSProperties}
         onChange={(e) => change(Number(e.currentTarget.value) / 100)}
       />
-      <span className={`ag-volume__value${percent > 100 ? " is-boost" : ""}`} onDoubleClick={() => change(1)}>
+      <SliderValue
+        className={`ag-volume__value${percent > 100 ? " is-boost" : ""}`}
+        draft={String(percent)}
+        onChange={(typed) => change(Math.min(max, Math.max(0, Math.round(typed) / 100)))}
+        onReset={() => change(1)}
+      >
         {percent}%
-      </span>
+      </SliderValue>
     </div>
   );
 }
@@ -112,9 +189,14 @@ function BalanceSlider({ id, value }: { id: string; value: number }) {
         onChange={(e) => change(Number(e.currentTarget.value) / 100)}
       />
       <span className="ag-balance__edge">{t("balance_right_short")}</span>
-      <span className={`ag-volume__value${percent !== 0 ? " is-boost" : ""}`} onDoubleClick={() => change(0)}>
+      <SliderValue
+        className={`ag-volume__value${percent !== 0 ? " is-boost" : ""}`}
+        draft={String(percent)}
+        onChange={(typed) => change(Math.min(100, Math.max(-100, Math.round(typed))) / 100)}
+        onReset={() => change(0)}
+      >
         {text}
-      </span>
+      </SliderValue>
     </div>
   );
 }
@@ -155,9 +237,14 @@ function DelaySlider({ id, value, limit, hold }: { id: string; value: number; li
           style={{ "--from": `${Math.min(at, zero) * 100}%`, "--to": `${Math.max(at, zero) * 100}%` } as CSSProperties}
           onChange={(e) => setDelay(id, Number(e.currentTarget.value) / 1000)}
         />
-        <span className={`ag-delay__value${shown !== 0 ? " is-set" : ""}`} onDoubleClick={() => setDelay(id, 0)}>
+        <SliderValue
+          className={`ag-delay__value${shown !== 0 ? " is-set" : ""}`}
+          draft={new Intl.NumberFormat(language, { maximumFractionDigits: 3, useGrouping: false }).format(shown)}
+          onChange={(typed) => setDelay(id, Math.min(limit, Math.max(min, Math.round(typed * 1000) / 1000)))}
+          onReset={() => setDelay(id, 0)}
+        >
           {seconds(shown, 3)}
-        </span>
+        </SliderValue>
       </div>
       <span className="ag-delay__edge">{seconds(limit, 0)}</span>
     </div>
