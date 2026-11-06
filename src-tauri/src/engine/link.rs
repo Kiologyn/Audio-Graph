@@ -1,6 +1,6 @@
 //! A "recording device → output device" link: a buffer between their streams and latency
 //! adjustment. Device clocks run slightly differently, so the buffer's reserve slowly
-//! grows or shrinks; it is kept near the target by dropping or repeating one frame at a time.
+//! grows or shrinks; it is kept near the target by playing a packet a frame longer or shorter.
 //! A delay is a bigger reserve: the sound waits in the buffer that much longer.
 
 use super::plan::{Gain, MAX_DELAY};
@@ -113,20 +113,34 @@ impl LinkReader {
             self.primed = false;
             return;
         }
-        if self.average > (target + SLACK) as f32 && available > need {
-            // recording runs fast: drop one frame
-            self.ring.skip(CHANNELS);
+        if self.average > (target + SLACK) as f32 && available > need + 1 {
+            // recording runs fast: the packet takes in a frame more
+            self.mix_stretched(out, need + 1, from, to);
+            return;
         } else if self.average < (target - SLACK) as f32 && need > 1 {
-            // recording runs slow: repeat the last frame
-            let last: [f32; CHANNELS] = std::array::from_fn(|ch| self.ring.peek((need - 2) * CHANNELS + ch));
-            let n = (need - 1) * CHANNELS;
-            self.ring.mix_into_scaled(&mut out[..n], from, to);
-            for ((o, s), g) in out[n..].iter_mut().zip(last).zip(to) {
-                *o += s * g;
-            }
+            // recording runs slow: a frame less
+            self.mix_stretched(out, need - 1, from, to);
             return;
         }
         self.ring.mix_into_scaled(out, from, to);
+    }
+
+    /// Plays this many frames of the buffer as the whole packet: the correction is spread over it
+    /// (a pitch change of a few cents at most), a frame dropped or repeated at once would click.
+    /// The buffer must hold a frame more than that
+    fn mix_stretched(&mut self, out: &mut [f32], frames: usize, from: Gain, to: Gain) {
+        let need = out.len() / CHANNELS;
+        let step = frames as f32 / need as f32;
+        for (i, frame) in out.chunks_exact_mut(CHANNELS).enumerate() {
+            let at = i as f32 * step;
+            let (whole, part) = (at as usize * CHANNELS, at.fract());
+            let ramp = i as f32 / (need - 1) as f32;
+            for (ch, o) in frame.iter_mut().enumerate() {
+                let (a, b) = (self.ring.peek(whole + ch), self.ring.peek(whole + CHANNELS + ch));
+                *o += (a + (b - a) * part) * (from[ch] + (to[ch] - from[ch]) * ramp);
+            }
+        }
+        self.ring.skip(frames * CHANNELS);
     }
 }
 
@@ -167,6 +181,35 @@ mod tests {
             let (silent, level) = simulate(drift, 60);
             assert_eq!(silent, 0, "drift {drift}");
             assert!(level.abs_diff(TARGET) <= SLACK + 50, "drift {drift}: reserve {level}");
+        }
+    }
+
+    /// The biggest jump between neighbouring frames of a 440 Hz sine that comes through a link
+    /// while its clock drifts: a frame dropped or repeated at once would stand out
+    #[test]
+    fn drift_correction_doesnt_click() {
+        for extra in [1isize, -1] {
+            let (producer, mut reader) = link();
+            let mut out = vec![0.0f32; 480 * CHANNELS];
+            let mut phase = 0usize;
+            let mut played: Vec<f32> = Vec::new();
+            for i in 0..3000 {
+                let frames = (480 + if i % 2 == 0 { extra } else { 0 }) as usize;
+                let packet: Vec<f32> = (phase..phase + frames)
+                    .flat_map(|n| [((n as f64 * 440.0 * std::f64::consts::TAU / RATE as f64).sin() * 0.5) as f32; CHANNELS])
+                    .collect();
+                phase += frames;
+                producer.push(&packet);
+                out.fill(0.0);
+                reader.mix_into(&mut out);
+                played.extend(out.iter().step_by(CHANNELS).copied());
+            }
+            // the sine's own curve: k x[n] = x[n - 1] + x[n + 1]; what is left of it are clicks
+            let k = 2.0 * (440.0 * std::f32::consts::TAU / RATE as f32).cos();
+            let click = played[9600..].windows(3).map(|w| (w[2] - k * w[1] + w[0]).abs()).fold(0.0f32, f32::max);
+            // a frame dropped at once leaves about 0.03; the drift was corrected, or the reserve would be gone
+            assert!(click < 0.002, "drift {extra}: {click}");
+            assert!((reader.ring.len() / CHANNELS).abs_diff(TARGET) <= SLACK + 480, "drift {extra}");
         }
     }
 
