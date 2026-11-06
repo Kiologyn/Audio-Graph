@@ -241,7 +241,6 @@
   "error_create_cable": "couldn't create cable “{name}”: {error}",
   "error_set_default_device": "couldn't set the default device: {error}",
   "error_move_app_audio": "couldn't move the app's audio: {error}",
-  "error_connect_devices": "couldn't connect the devices: {error}",
   "error_audio_server_not_responding": "the audio server isn't responding",
   "quit_app": "Quit Audio Graph",
   "quit_app_hint": "Graphs stop, and apps and devices return to their previous settings"

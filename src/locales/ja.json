@@ -241,7 +241,6 @@
   "error_create_cable": "ケーブル「{name}」を作成できませんでした: {error}",
   "error_set_default_device": "既定のデバイスを設定できませんでした: {error}",
   "error_move_app_audio": "アプリの音声を移動できませんでした: {error}",
-  "error_connect_devices": "デバイスを接続できませんでした: {error}",
   "error_audio_server_not_responding": "オーディオサーバーが応答しません",
   "quit_app": "Audio Graph を終了",
   "quit_app_hint": "グラフが停止し、アプリとデバイスは元の設定に戻ります"

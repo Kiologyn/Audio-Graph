@@ -4,13 +4,15 @@
 //! One supervisor thread does it all: it receives changes, checks the system every TICK,
 //! rebuilds the plan (plan.rs) and brings audio streams and app devices in line with it.
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 mod link;
 #[cfg(target_os = "linux")]
 mod linux;
 pub(crate) mod plan;
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 mod ring;
+#[cfg(any(windows, target_os = "linux"))]
+mod streams;
 #[cfg(windows)]
 mod win;
 #[cfg(windows)]

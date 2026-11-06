@@ -241,7 +241,6 @@
   "error_create_cable": "no se pudo crear el cable «{name}»: {error}",
   "error_set_default_device": "no se pudo establecer el dispositivo predeterminado: {error}",
   "error_move_app_audio": "no se pudo mover el audio de la aplicación: {error}",
-  "error_connect_devices": "no se pudieron conectar los dispositivos: {error}",
   "error_audio_server_not_responding": "el servidor de audio no responde",
   "quit_app": "Salir de Audio Graph",
   "quit_app_hint": "Los grafos se detienen y las aplicaciones y los dispositivos vuelven a su configuración anterior"

@@ -241,7 +241,6 @@
   "error_create_cable": "无法创建线缆“{name}”：{error}",
   "error_set_default_device": "无法设置默认设备：{error}",
   "error_move_app_audio": "无法转移应用的声音：{error}",
-  "error_connect_devices": "无法连接设备：{error}",
   "error_audio_server_not_responding": "音频服务器没有响应",
   "quit_app": "退出 Audio Graph",
   "quit_app_hint": "图将停止，应用和设备会恢复到之前的设置"

@@ -49,7 +49,7 @@ The graph above sends Spotify to the headphones and, at the same time, mixes it 
 | App → device or cable | the app's own output device is set to it | the app's playback streams are moved to it |
 | Device or cable → App | the app's own input device is set to it | the app's recording streams are moved to it |
 | System → … / … → System | the default output and input devices are switched while the graph runs | the same, through the audio server |
-| Between inputs, outputs and cables | the Audio Graph engine: WASAPI shared-mode streams, 48 kHz float stereo, with clock drift correction between devices; delays are held in the link's buffer | the audio server: a loopback per arrow, with the path's volume; delays are added to the loopback's latency |
+| Between inputs, outputs and cables | the Audio Graph engine: WASAPI shared-mode streams, 48 kHz float stereo, with clock drift correction between devices; volume, balance and delays are in the link's buffer | the same engine on recording and playback streams of the audio server |
 | Cable | a mix point inside the engine, or a pair of driver devices | a virtual output device and a virtual input device named after the node |
 
 Things that follow from this:
@@ -111,8 +111,9 @@ The app keeps its data in `%APPDATA%\dev.audiograph.app` on Windows and `~/.loca
 | `src/` | The interface: React, [React Flow](https://reactflow.dev/) for the canvas, Zustand for state |
 | `src/locales/` | Translations, shared by the interface and the Rust side |
 | `src-tauri/src/engine/plan.rs` | Turns graphs into a plan: app routing, engine streams, virtual cables, problems |
-| `src-tauri/src/engine/win/` | Executes the plan on Windows: audio streams (`streams.rs`) and Windows device settings (`router.rs`) |
-| `src-tauri/src/engine/linux.rs` | Executes the plan on Linux through the audio server (`src-tauri/src/pulse.rs`) |
+| `src-tauri/src/engine/streams.rs`, `link.rs` | The sound between devices: a stream per device and a buffer per link, with volume, balance and delay |
+| `src-tauri/src/engine/win/` | Executes the plan on Windows: WASAPI streams (`streams.rs`) and Windows device settings (`router.rs`) |
+| `src-tauri/src/engine/linux.rs`, `linux/` | Executes the plan on Linux through the audio server (`src-tauri/src/pulse.rs`): cables, app devices and the server's streams |
 | `src-tauri/src/calibrate/` | Delay calibration: plays the sweep, records the microphone and finds the sweep in the recording |
 | `src-tauri/src/devices/pairs.rs` | Finds the two devices of each virtual cable by what the drivers tell about them (Windows) |
 | `src-tauri/src/` | Storage of graphs, cables and settings, device and app lists and their changes, autostart, the tray |

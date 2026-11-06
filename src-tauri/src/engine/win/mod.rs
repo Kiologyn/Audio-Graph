@@ -2,21 +2,22 @@
 
 pub(crate) mod probe;
 mod router;
-mod streams;
+pub(super) mod streams;
 
 use super::plan::{Defaults, Plan};
+use super::streams::Streams;
 use super::{AppStatus, StreamStatus};
 use std::path::Path;
 
 pub struct Backend {
-    streams: streams::Streams,
+    streams: Streams,
     router: router::Router,
 }
 
 impl Backend {
     pub fn new(data_dir: &Path) -> Self {
         Self {
-            streams: streams::Streams::default(),
+            streams: Streams::default(),
             router: router::Router::new(data_dir),
         }
     }

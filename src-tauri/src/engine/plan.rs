@@ -124,7 +124,7 @@ pub struct VirtualCable {
 /// The prefix of virtual device names: it tells them apart from the system's devices
 pub const VIRTUAL_PREFIX: &str = "audiograph.";
 
-/// The most a link delays sound, in seconds: PipeWire loopbacks don't hold more than about 2 s
+/// The most a link delays sound, in seconds: what its buffer is made for
 pub const MAX_DELAY: f32 = 2.0;
 
 /// A stream source "loopback:<output device>" is the sound played into that output device

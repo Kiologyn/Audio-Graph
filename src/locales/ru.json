@@ -241,7 +241,6 @@
   "error_create_cable": "не удалось создать кабель «{name}»: {error}",
   "error_set_default_device": "не удалось назначить устройство по умолчанию: {error}",
   "error_move_app_audio": "не удалось перенести звук приложения: {error}",
-  "error_connect_devices": "не удалось соединить устройства: {error}",
   "error_audio_server_not_responding": "звуковой сервер не отвечает",
   "quit_app": "Выйти из Audio Graph",
   "quit_app_hint": "Графы остановятся, приложения и устройства вернутся к прежним настройкам"
