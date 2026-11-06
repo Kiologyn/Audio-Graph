@@ -22,10 +22,6 @@ fn full_volume() -> f32 {
     1.0
 }
 
-fn yes() -> bool {
-    true
-}
-
 fn half_second() -> f32 {
     0.5
 }
@@ -102,6 +98,9 @@ pub struct GraphNode {
     /// Left-right balance from -1 (left only) to 1 (right only); engine streams only
     #[serde(default)]
     pub balance: f32,
+    /// The sliders that stay on the node, not only in its menu: "volume", "balance", "delay"
+    #[serde(default)]
+    pub pinned: Vec<String>,
     pub position: Position,
 }
 
@@ -127,21 +126,18 @@ pub struct Graph {
     pub nodes: Vec<GraphNode>,
     #[serde(default)]
     pub edges: Vec<GraphEdge>,
-    /// Volume sliders on this graph's nodes
-    #[serde(default = "yes")]
-    pub show_volume: bool,
-    /// Delay sliders on this graph's output nodes; while off, its delays aren't applied
-    #[serde(default)]
-    pub show_delay: bool,
+    /// Files of older versions: whether delays were on. What was off stays without effect (upgraded)
+    #[serde(default, skip_serializing)]
+    pub show_delay: Option<bool>,
     /// The delay sliders' range: from minus this many seconds to plus
     #[serde(default = "half_second")]
     pub delay_limit: f32,
     /// Start the graph when the app starts with the system
     #[serde(default)]
     pub start_on_launch: bool,
-    /// Balance sliders on this graph's nodes; while off, its balances aren't applied
-    #[serde(default)]
-    pub show_balance: bool,
+    /// Files of older versions: whether balances were on. What was off stays without effect (upgraded)
+    #[serde(default, skip_serializing)]
+    pub show_balance: Option<bool>,
 }
 
 /// The widest delay slider range: delays relative to each other add up, so two of these must fit
@@ -149,9 +145,25 @@ pub struct Graph {
 pub const MAX_DELAY_LIMIT: f32 = crate::engine::plan::MAX_DELAY / 2.0;
 
 impl Graph {
-    /// The delay slider range if the graph's delays are on, within what the engine can do
-    pub fn delay_limit(&self) -> Option<f32> {
-        self.show_delay.then(|| self.delay_limit.clamp(0.001, MAX_DELAY_LIMIT))
+    /// The delay slider range, within what the engine can do
+    pub fn delay_limit(&self) -> f32 {
+        self.delay_limit.clamp(0.001, MAX_DELAY_LIMIT)
+    }
+
+    /// A graph from a file of any version. Older versions could turn a graph's delays and balances
+    /// off and kept the values: they must not start working now that delays and balances always apply
+    fn upgraded(mut self) -> Self {
+        for node in &mut self.nodes {
+            if self.show_delay == Some(false) {
+                node.delay = 0.0;
+            }
+            if self.show_balance == Some(false) {
+                node.balance = 0.0;
+            }
+        }
+        self.show_delay = None;
+        self.show_balance = None;
+        self
     }
 }
 
@@ -163,11 +175,8 @@ pub struct GraphMeta {
     pub name: String,
     pub created_at: u64,
     pub updated_at: u64,
-    pub show_volume: bool,
-    pub show_delay: bool,
     pub delay_limit: f32,
     pub start_on_launch: bool,
-    pub show_balance: bool,
 }
 
 impl From<&Graph> for GraphMeta {
@@ -177,11 +186,8 @@ impl From<&Graph> for GraphMeta {
             name: g.name.clone(),
             created_at: g.created_at,
             updated_at: g.updated_at,
-            show_volume: g.show_volume,
-            show_delay: g.show_delay,
             delay_limit: g.delay_limit,
             start_on_launch: g.start_on_launch,
-            show_balance: g.show_balance,
         }
     }
 }
@@ -190,11 +196,8 @@ impl From<&Graph> for GraphMeta {
 #[derive(Deserialize, Clone, Copy, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphPrefs {
-    pub show_volume: bool,
-    pub show_delay: bool,
     pub delay_limit: f32,
     pub start_on_launch: bool,
-    pub show_balance: bool,
 }
 
 /// What a graph export file says about itself
@@ -258,7 +261,7 @@ impl GraphStore {
     fn read(&self, id: &str) -> CmdResult<Graph> {
         check_id(id)?;
         let text = fs::read_to_string(self.path(id)).map_err(err)?;
-        serde_json::from_str(&text).map_err(err)
+        serde_json::from_str(&text).map(Graph::upgraded).map_err(err)
     }
 
     fn write(&self, graph: &Graph) -> CmdResult<()> {
@@ -343,8 +346,6 @@ pub fn graph_create(
     name: String,
     nodes: Vec<GraphNode>,
     edges: Vec<GraphEdge>,
-    show_volume: Option<bool>,
-    show_delay: Option<bool>,
 ) -> CmdResult<Graph> {
     let _guard = store.lock.lock().map_err(err)?;
     let now = now_ms();
@@ -357,11 +358,10 @@ pub fn graph_create(
         viewport: None,
         nodes,
         edges,
-        show_volume: show_volume.unwrap_or(true),
-        show_delay: show_delay.unwrap_or(false),
+        show_delay: None,
         delay_limit: half_second(),
         start_on_launch: false,
-        show_balance: false,
+        show_balance: None,
     };
     store.write(&graph)?;
     store.set_last_opened(Some(&graph.id))?;
@@ -401,11 +401,8 @@ pub fn graph_rename(store: State<GraphStore>, engine: State<Engine>, id: String,
 pub fn graph_set_prefs(store: State<GraphStore>, engine: State<Engine>, id: String, prefs: GraphPrefs) -> CmdResult<GraphMeta> {
     let _guard = store.lock.lock().map_err(err)?;
     let mut graph = store.read(&id)?;
-    graph.show_volume = prefs.show_volume;
-    graph.show_delay = prefs.show_delay;
     graph.delay_limit = prefs.delay_limit.clamp(0.001, MAX_DELAY_LIMIT);
     graph.start_on_launch = prefs.start_on_launch;
-    graph.show_balance = prefs.show_balance;
     graph.updated_at = now_ms();
     store.write(&graph)?;
     engine.saved(&graph);
@@ -462,9 +459,9 @@ pub fn graph_import(
 /// computer's data folder (no cables then)
 fn parse_import(text: &str) -> CmdResult<(Graph, Vec<Cable>)> {
     match serde_json::from_str::<ExportFile>(text) {
-        Ok(f) if f.format == EXPORT_FORMAT => Ok((f.graph, f.cables)),
+        Ok(f) if f.format == EXPORT_FORMAT => Ok((f.graph.upgraded(), f.cables)),
         _ => serde_json::from_str::<Graph>(text)
-            .map(|g| (g, Vec::new()))
+            .map(|g| (g.upgraded(), Vec::new()))
             .map_err(|_| tr!("error_import_not_graph")),
     }
 }
@@ -587,24 +584,47 @@ mod tests {
                       "sink":{"type":"device","id":"spk","name":"Speakers"}}]}"#;
         let g: Graph = serde_json::from_str(text).unwrap();
         assert_eq!(g.version, FORMAT_VERSION);
-        assert!(g.show_volume && !g.show_delay && !g.show_balance && !g.start_on_launch);
+        assert!(!g.start_on_launch);
         assert_eq!(g.delay_limit, 0.5);
         assert!(g.edges.is_empty() && g.viewport.is_none());
         let n = &g.nodes[0];
         assert_eq!((n.volume, n.delay, n.balance), (1.0, 0.0, 0.0));
+        assert!(n.pinned.is_empty());
         assert_eq!(n.sink, Some(DeviceRef::Device { id: "spk".into(), name: "Speakers".into() }));
     }
 
     #[test]
-    fn delay_range_is_only_there_with_the_sliders_on_and_stays_within_the_engine() {
+    fn delay_range_stays_within_the_engine() {
         let mut g = graph("g", 1, false);
-        assert_eq!(g.delay_limit(), None);
-        g.show_delay = true;
-        assert_eq!(g.delay_limit(), Some(0.5));
+        assert_eq!(g.delay_limit(), 0.5);
         g.delay_limit = 0.0;
-        assert_eq!(g.delay_limit(), Some(0.001));
+        assert_eq!(g.delay_limit(), 0.001);
         g.delay_limit = 10.0;
-        assert_eq!(g.delay_limit(), Some(MAX_DELAY_LIMIT));
+        assert_eq!(g.delay_limit(), MAX_DELAY_LIMIT);
+    }
+
+    #[test]
+    fn what_older_versions_had_turned_off_stays_without_effect() {
+        let file = |delay: bool, balance: bool| {
+            format!(
+                r#"{{"id":"g","name":"Old","createdAt":1,"updatedAt":1,"showVolume":false,"showDelay":{delay},"showBalance":{balance},
+                    "nodes":[{{"id":"o","kind":"output","label":"Speakers","position":{{"x":0,"y":0}},"delay":0.3,"balance":-1.0}}]}}"#
+            )
+        };
+        let node = |text: String| {
+            let g = serde_json::from_str::<Graph>(&text).unwrap().upgraded();
+            (g.nodes[0].delay, g.nodes[0].balance)
+        };
+        assert_eq!(node(file(false, false)), (0.0, 0.0));
+        assert_eq!(node(file(true, false)), (0.3, 0.0));
+        assert_eq!(node(file(false, true)), (0.0, -1.0));
+        assert_eq!(node(file(true, true)), (0.3, -1.0));
+
+        // the flags aren't written back, and a file without them keeps its values
+        let g = serde_json::from_str::<Graph>(&file(true, true)).unwrap().upgraded();
+        let text = serde_json::to_string(&g).unwrap();
+        assert!(!text.contains("showDelay") && !text.contains("showBalance"), "{text}");
+        assert_eq!(node(text), (0.3, -1.0));
     }
 
     #[test]

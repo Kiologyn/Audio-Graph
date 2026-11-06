@@ -21,6 +21,7 @@ const [mix] = nodesFromDoc([
     volume: 1,
     delay: 0,
     balance: 0,
+    pinned: [],
     position: { x: 0, y: 0 },
   },
 ]);

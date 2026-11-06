@@ -9,10 +9,11 @@ import { useCables } from "./cables";
 import { DevicePicker } from "./DevicePicker";
 import { useDevices } from "./devices";
 import { useEngine } from "./engine";
-import { KindIcon } from "./icons";
+import { Icon, KindIcon } from "./icons";
+import { Popover } from "./Popover";
 import { nodeNotes } from "./problems";
 import { useGraph } from "./store";
-import { NODE_KINDS, type AudioNode } from "./types";
+import { NODE_KINDS, nodeSliders, type AudioNode, type NodeSlider } from "./types";
 
 /** The system's default devices now; while a graph with this node runs, it sets them */
 function SystemDefaults() {
@@ -161,6 +162,68 @@ function DelaySlider({ id, value, limit }: { id: string; value: number; limit: n
   );
 }
 
+const SLIDER_NAMES: Record<NodeSlider, string> = {
+  volume: "node_option_volume",
+  balance: "node_option_balance",
+  delay: "node_option_delay",
+};
+
+/** One of a node's sliders, the same in its menu and pinned to the node */
+function SliderOf({ id, data, slider }: { id: string; data: AudioNode["data"]; slider: NodeSlider }) {
+  const meta = NODE_KINDS[data.kind];
+  const delayLimit = useGraph((s) => s.meta?.delayLimit ?? 0.5);
+  if (slider === "volume") return <VolumeSlider id={id} value={data.volume ?? 1} max={meta.maxVolume ?? 1} />;
+  if (slider === "balance") return <BalanceSlider id={id} value={data.balance ?? 0} />;
+  return <DelaySlider id={id} value={data.delay ?? 0} limit={delayLimit} />;
+}
+
+/** The arrow in a node's corner: a menu with its sliders, each can be pinned to the node. A node without sliders has no arrow */
+function NodeOptions({ id, data }: { id: string; data: AudioNode["data"] }) {
+  const togglePinned = useGraph((s) => s.togglePinned);
+  const sliders = nodeSliders(data.kind);
+  const anchor = useRef<HTMLButtonElement>(null);
+  const [open, setOpen] = useState(false);
+  const t = useT();
+  if (sliders.length === 0) return null;
+  return (
+    <>
+      <button
+        ref={anchor}
+        className={`ag-node__options nodrag${open ? " is-open" : ""}`}
+        title={t("node_options")}
+        onClick={() => setOpen(!open)}
+      >
+        <Icon name="chevron" size={12} />
+      </button>
+      {open && (
+        <Popover anchor={anchor} onClose={() => setOpen(false)}>
+          <div className={`ag-node-options ag-node--${data.kind}`}>
+            {sliders.map((slider) => {
+              const pinned = data.pinned.includes(slider);
+              return (
+                <div key={slider} className="ag-node-options__row">
+                  <div className="ag-node-options__head">
+                    <span>{t(SLIDER_NAMES[slider])}</span>
+                    <button
+                      className={`ag-node-options__pin${pinned ? " is-on" : ""}`}
+                      title={t(pinned ? "node_unpin" : "node_pin")}
+                      aria-pressed={pinned}
+                      onClick={() => togglePinned(id, slider)}
+                    >
+                      <Icon name="pin" size={14} />
+                    </button>
+                  </div>
+                  <SliderOf id={id} data={data} slider={slider} />
+                </div>
+              );
+            })}
+          </div>
+        </Popover>
+      )}
+    </>
+  );
+}
+
 function AudioNodeView({ id, data, selected }: NodeProps<AudioNode>) {
   const meta = NODE_KINDS[data.kind];
   const renameNode = useGraph((s) => s.renameNode);
@@ -172,10 +235,6 @@ function AudioNodeView({ id, data, selected }: NodeProps<AudioNode>) {
   const graphId = useGraph((s) => s.meta?.id);
   const cables = useCables((s) => s.cables);
   const devices = useDevices((s) => s.devices);
-  const showVolume = useGraph((s) => s.meta?.showVolume ?? true);
-  const showBalance = useGraph((s) => s.meta?.showBalance ?? false);
-  const showDelay = useGraph((s) => s.meta?.showDelay ?? false);
-  const delayLimit = useGraph((s) => s.meta?.delayLimit ?? 0.5);
   const t = useT();
   // t in the dependencies: note texts are translated when the language changes
   const { notes, flagged } = useMemo(
@@ -198,6 +257,7 @@ function AudioNodeView({ id, data, selected }: NodeProps<AudioNode>) {
       <div className="ag-node__kind">
         <KindIcon kind={data.kind} />
         {t(meta.title)}
+        <NodeOptions id={id} data={data} />
       </div>
 
       {editing ? (
@@ -260,11 +320,14 @@ function AudioNodeView({ id, data, selected }: NodeProps<AudioNode>) {
 
       {meta.showDefaults && <SystemDefaults />}
 
-      {showVolume && meta.maxVolume && <VolumeSlider id={id} value={data.volume ?? 1} max={meta.maxVolume} />}
-
-      {showBalance && meta.balance && <BalanceSlider id={id} value={data.balance ?? 0} />}
-
-      {showDelay && meta.delay && <DelaySlider id={id} value={data.delay ?? 0} limit={delayLimit} />}
+      {nodeSliders(data.kind)
+        .filter((slider) => data.pinned.includes(slider))
+        .map((slider) => (
+          <div key={slider} className="ag-node__slider">
+            <span>{t(SLIDER_NAMES[slider])}</span>
+            <SliderOf id={id} data={data} slider={slider} />
+          </div>
+        ))}
 
       {notes.length > 0 && (
         <div className="ag-node__notes">

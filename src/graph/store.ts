@@ -16,8 +16,10 @@ import {
   NODE_KINDS,
   type AudioEdge,
   type AudioNode,
+  type AudioNodeData,
   type AudioNodeKind,
   type AppRef,
+  type NodeSlider,
   type DeviceRef,
   type DeviceSlotName,
 } from "./types";
@@ -46,6 +48,8 @@ type GraphState = {
   setApp: (id: string, app: AppRef | null) => void;
   setVolume: (id: string, volume: number) => void;
   setDelay: (id: string, delay: number) => void;
+  /** Pins a slider to its node or takes it off */
+  togglePinned: (id: string, slider: NodeSlider) => void;
   /** Delays of several outputs as one undo step (calibration) */
   setDelays: (delays: Record<string, number>) => void;
   setBalance: (id: string, balance: number) => void;
@@ -80,7 +84,7 @@ function makeNode(kind: AudioNodeKind, position: XYPosition, label?: string): Au
     id: crypto.randomUUID(),
     type: "audio",
     position,
-    data: { kind, label: label ?? t(NODE_KINDS[kind].defaultLabel), sink: null, source: null, cable: null, app: null, volume: 1, delay: 0, balance: 0 },
+    data: { kind, label: label ?? t(NODE_KINDS[kind].defaultLabel), sink: null, source: null, cable: null, app: null, volume: 1, delay: 0, balance: 0, pinned: [] },
   };
 }
 
@@ -172,11 +176,8 @@ export const useGraph = create<GraphState>()((set, get) => {
           id: doc.id,
           name: doc.name,
           createdAt: doc.createdAt,
-          showVolume: doc.showVolume ?? true,
-          showDelay: doc.showDelay ?? false,
           delayLimit: doc.delayLimit ?? 0.5,
           startOnLaunch: doc.startOnLaunch ?? false,
-          showBalance: doc.showBalance ?? false,
         },
         viewport: doc.viewport,
         nodes: nodesFromDoc(doc.nodes),
@@ -286,6 +287,15 @@ export const useGraph = create<GraphState>()((set, get) => {
       record(`delay:${id}`);
       set({
         nodes: get().nodes.map((n) => (n.id === id ? { ...n, data: { ...n.data, delay } } : n)),
+      });
+    },
+
+    togglePinned: (id, slider) => {
+      record();
+      const toggled = ({ pinned }: AudioNodeData) =>
+        pinned.includes(slider) ? pinned.filter((s) => s !== slider) : [...pinned, slider];
+      set({
+        nodes: get().nodes.map((n) => (n.id === id ? { ...n, data: { ...n.data, pinned: toggled(n.data) } } : n)),
       });
     },
 

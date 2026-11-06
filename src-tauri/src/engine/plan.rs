@@ -101,9 +101,6 @@ pub struct Plan {
     pub issues: Vec<Issue>,
     /// Virtual cable devices to create (Linux)
     pub virtual_cables: Vec<VirtualCable>,
-    /// Output nodes with a delay that an app or "System" plays into directly: the system
-    /// plays that sound, the engine can't delay it. apply_delays makes them issues when delays are on
-    pub undelayed: Vec<Issue>,
 }
 
 /// A cable the graph creates itself: an output device (the cable's input) and an input device (its output)
@@ -200,8 +197,8 @@ struct Compiler<'a> {
     /// Taking the "System" node replacement into account
     defaults: Defaults,
     issues: Vec<Issue>,
-    /// The graph's balance sliders are on: while off, its balances aren't applied
-    balance: bool,
+    /// The graph's delay slider range
+    delay_limit: f32,
 }
 
 impl<'a> Compiler<'a> {
@@ -220,7 +217,15 @@ impl<'a> Compiler<'a> {
 
     /// What a node does to the sound passing through the engine: its volume and balance
     fn gain(&self, node: &GraphNode) -> Gain {
-        balanced(node.volume, if self.balance { node.balance } else { 0.0 })
+        balanced(node.volume, node.balance)
+    }
+
+    /// A node's delay within the graph's slider range: only an output has one
+    fn delay(&self, node: &GraphNode) -> f32 {
+        match node.kind {
+            NodeKind::Output => node.delay.clamp(-self.delay_limit, self.delay_limit),
+            _ => 0.0,
+        }
     }
 
     fn issue(&mut self, nodes: &[&str], edges: &[&str], message: impl Into<String>) {
@@ -443,7 +448,7 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
         cables: cables.iter().map(|c| (c.id.as_str(), c)).collect(),
         defaults: defaults.clone(),
         issues: Vec::new(),
-        balance: graph.show_balance,
+        delay_limit: graph.delay_limit(),
     };
     let node_ids: Vec<&str> = graph.nodes.iter().map(|n| n.id.as_str()).collect();
     let mut edges: Vec<&GraphEdge> = graph
@@ -472,7 +477,6 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
     let mut routes = Vec::new();
     let mut system: Option<SystemRoute> = None;
     let mut seen_apps: HashMap<String, &str> = HashMap::new();
-    let mut undelayed = Vec::new();
     let ordered = graph
         .nodes
         .iter()
@@ -496,15 +500,11 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
                 let target = c.nodes[edge.target.as_str()];
                 let render = c.app_render(edge, target);
                 // the system plays this sound: balance (in the system only for a whole device) doesn't apply
-                if render.is_some() && target.kind == NodeKind::Output && c.balance && target.balance != 0.0 {
+                if render.is_some() && target.kind == NodeKind::Output && target.balance != 0.0 {
                     c.issue(&[&target.id, &node.id], &[&edge.id], tr!("issue_balance_direct"));
                 }
-                if render.is_some() && target.kind == NodeKind::Output && target.delay != 0.0 {
-                    undelayed.push(Issue {
-                        nodes: vec![target.id.clone(), node.id.clone()],
-                        edges: vec![edge.id.clone()],
-                        message: tr!("issue_delay_direct"),
-                    });
+                if render.is_some() && target.kind == NodeKind::Output && c.delay(target) != 0.0 {
+                    c.issue(&[&target.id, &node.id], &[&edge.id], tr!("issue_delay_direct"));
                 }
                 render
             }
@@ -622,7 +622,7 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
         // a cable's volume applies to the sound taken from it, so a receiving cable doesn't multiply it in
         let sink_volume = if matches!(c.role(node), Role::Output(_)) { c.gain(node) } else { [1.0; 2] };
         // only an output node delays: a cable passes its sound on at once
-        let delay = if matches!(c.role(node), Role::Output(_)) { node.delay } else { 0.0 };
+        let delay = if matches!(c.role(node), Role::Output(_)) { c.delay(node) } else { 0.0 };
         let mut sources = BTreeMap::new();
         c.collect_sources(node, &engine_edges, &mut HashSet::new(), sink_volume, &mut sources);
         let Some(sink) = c.sink_device(node) else { continue };
@@ -656,7 +656,6 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
         streams: into_streams(streams, &outputs),
         issues: c.issues,
         virtual_cables: Vec::new(),
-        undelayed,
     }
 }
 
@@ -680,20 +679,10 @@ fn into_streams(streams: BTreeMap<String, BTreeMap<String, (Gain, f32)>>, output
         .collect()
 }
 
-/// Output delays as the engine plays them. limits, one per plan: the slider range if the graph has
-/// delays turned on; None: off, its outputs aren't delayed. A delay is relative to the other outputs:
-/// minus means earlier, and since sound can't play earlier, all the other outputs of running graphs
-/// are delayed by as much instead. The first running plans go to the engine, the rest only show issues
-pub fn apply_delays(plans: &mut [Plan], running: usize, limits: &[Option<f32>]) {
-    for (plan, limit) in plans.iter_mut().zip(limits) {
-        let undelayed = std::mem::take(&mut plan.undelayed);
-        let Some(limit) = *limit else {
-            plan.streams.iter_mut().flat_map(|s| &mut s.sources).for_each(|s| s.delay = 0.0);
-            continue;
-        };
-        plan.streams.iter_mut().flat_map(|s| &mut s.sources).for_each(|s| s.delay = s.delay.clamp(-limit, limit));
-        plan.issues.extend(undelayed);
-    }
+/// Output delays of running graphs as the engine plays them (compile has applied each graph's range).
+/// A delay is relative to the other outputs: minus means earlier, and since sound can't play earlier,
+/// all the other outputs of running graphs are delayed by as much instead. The first running plans go to the engine
+pub fn apply_delays(plans: &mut [Plan], running: usize) {
     let count = running.min(plans.len());
     let outputs = || plans[..count].iter().flat_map(|p| &p.streams).filter(|s| s.output);
     let earliest = outputs().flat_map(|s| &s.sources).map(|s| s.delay).fold(0.0, f32::min);
@@ -831,8 +820,6 @@ pub fn merge(plans: &[Plan]) -> Plan {
         streams: into_streams(streams, &outputs),
         issues: plans.iter().flat_map(|p| p.issues.iter().cloned()).collect(),
         virtual_cables: plans.iter().flat_map(|p| p.virtual_cables.iter().cloned()).collect(),
-        // apply_delays has already made them issues
-        undelayed: Vec::new(),
     }
 }
 
@@ -860,6 +847,7 @@ mod tests {
             volume: 1.0,
             delay: 0.0,
             balance: 0.0,
+            pinned: Vec::new(),
             position: Position { x: 0.0, y: 0.0 },
         }
     }
@@ -911,11 +899,10 @@ mod tests {
                     target: t.to_string(),
                 })
                 .collect(),
-            show_volume: true,
-            show_delay: false,
+            show_delay: None,
             delay_limit: 0.5,
             start_on_launch: false,
-            show_balance: false,
+            show_balance: None,
         }
     }
     fn defaults() -> Defaults {
@@ -1147,11 +1134,7 @@ mod tests {
         let mut hp = output("o", dev("hp"));
         hp.balance = 0.25;
         let mut g = graph(vec![mic, hp, app("a", "a.exe"), output("o2", dev("spk"))], &[("mic", "o"), ("a", "o2")]);
-        let gain = |g: &Graph| compile(g, &[], &defaults()).streams[0].sources[0].gain;
-        // while the graph's balance sliders are off, balances aren't applied
-        assert_eq!(gain(&g), [0.8, 0.8]);
-        g.show_balance = true;
-        assert_eq!(gain(&g), [0.8 * 0.75, 0.8 * 0.5]);
+        assert_eq!(compile(&g, &[], &defaults()).streams[0].sources[0].gain, [0.8 * 0.75, 0.8 * 0.5]);
 
         // an app straight into an output: the system plays it, the balance can't apply
         g.nodes[3].balance = 1.0;
@@ -1245,9 +1228,22 @@ mod tests {
         GraphNode { delay, ..node }
     }
 
+    /// The graph with the delay range ±limit
+    fn with_range(mut g: Graph, limit: f32) -> Graph {
+        g.delay_limit = limit;
+        g
+    }
+
     /// The delay of each output device's first source, after apply_delays
     fn delays(plan: &Plan) -> Vec<(&str, f32)> {
         plan.streams.iter().map(|s| (s.sink.as_str(), (s.sources[0].delay * 1000.0).round() / 1000.0)).collect()
+    }
+
+    /// Compiles one running graph and applies its delays
+    fn delays_of(g: &Graph, cables: &[Cable]) -> Plan {
+        let mut plans = compile_all(&[g], cables, &defaults());
+        apply_delays(&mut plans, 1);
+        plans.remove(0)
     }
 
     #[test]
@@ -1257,19 +1253,10 @@ mod tests {
             vec![input("mic", dev("mic")), delayed(output("hp", dev("hp")), 0.1), delayed(output("spk", dev("spk")), -0.2)],
             &[("mic", "hp"), ("mic", "spk")],
         );
-        let compiled = compile_all(&[&g], &[], &defaults());
         // sound can't play earlier: the speakers get none, the headphones 0.2 + 0.1
-        let mut plans = compiled.clone();
-        apply_delays(&mut plans, 1, &[Some(0.5)]);
-        assert_eq!(delays(&plans[0]), vec![("hp", 0.3), ("spk", 0.0)]);
+        assert_eq!(delays(&delays_of(&with_range(g.clone(), 0.5), &[])), vec![("hp", 0.3), ("spk", 0.0)]);
         // the range cuts what is beyond it
-        let mut plans = compiled.clone();
-        apply_delays(&mut plans, 1, &[Some(0.15)]);
-        assert_eq!(delays(&plans[0]), vec![("hp", 0.25), ("spk", 0.0)]);
-        // delays turned off: nothing is delayed
-        let mut plans = compiled;
-        apply_delays(&mut plans, 1, &[None]);
-        assert_eq!(delays(&plans[0]), vec![("hp", 0.0), ("spk", 0.0)]);
+        assert_eq!(delays(&delays_of(&with_range(g, 0.15), &[])), vec![("hp", 0.25), ("spk", 0.0)]);
     }
 
     #[test]
@@ -1280,17 +1267,17 @@ mod tests {
             vec![input("mic", dev("mic")), cable_node("c", Some("c")), delayed(output("hp", dev("hp")), -0.4)],
             &[("mic", "c"), ("c", "hp")],
         );
-        let mut plans = compile_all(&[&g], &[cable("c", "c.in", "c.out")], &defaults());
-        apply_delays(&mut plans, 1, &[Some(0.5)]);
-        assert_eq!(delays(&plans[0]), vec![("c.in", 0.0), ("hp", 0.0)]);
+        let plan = delays_of(&with_range(g, 0.5), &[cable("c", "c.in", "c.out")]);
+        assert_eq!(delays(&plan), vec![("c.in", 0.0), ("hp", 0.0)]);
     }
 
     #[test]
     fn only_running_graphs_shift_each_other() {
         let running = named(graph(vec![input("mic", dev("mic")), output("hp", dev("hp"))], &[("mic", "hp")]), "a");
         let stopped = named(graph(vec![input("mic", dev("mic")), delayed(output("spk", dev("spk")), -0.3)], &[("mic", "spk")]), "b");
+        let (running, stopped) = (with_range(running, 0.5), with_range(stopped, 0.5));
         let mut plans = compile_all(&[&running, &stopped], &[], &defaults());
-        apply_delays(&mut plans, 1, &[Some(0.5)]);
+        apply_delays(&mut plans, 1);
         assert_eq!(delays(&plans[0]), vec![("hp", 0.0)]);
     }
 
@@ -1298,14 +1285,9 @@ mod tests {
     fn app_straight_into_delayed_output() {
         // the system plays the app's sound, the engine can't hold it back
         let g = graph(vec![app("a", "a.exe"), delayed(output("hp", dev("hp")), 0.2)], &[("a", "hp")]);
-        let mut plans = compile_all(&[&g], &[], &defaults());
-        apply_delays(&mut plans, 1, &[Some(0.5)]);
-        assert_eq!(plans[0].issues.len(), 1, "{:?}", plans[0].issues);
-        assert_eq!(plans[0].issues[0].nodes, vec!["hp", "a"]);
-        // with delays off there is nothing to warn about
-        let mut plans = compile_all(&[&g], &[], &defaults());
-        apply_delays(&mut plans, 1, &[None]);
-        assert!(plans[0].issues.is_empty());
+        let plan = delays_of(&g, &[]);
+        assert_eq!(plan.issues.len(), 1, "{:?}", plan.issues);
+        assert_eq!(plan.issues[0].nodes, vec!["hp", "a"]);
     }
 
     #[test]

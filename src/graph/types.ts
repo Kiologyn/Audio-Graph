@@ -30,6 +30,9 @@ export type AppRef = {
 /** sink is the output device behind the input port, source the recording device behind the output port */
 export type DeviceSlotName = "sink" | "source";
 
+/** A node's sliders. They are in its menu; a pinned one stays on the node too */
+export type NodeSlider = "volume" | "balance" | "delay";
+
 export type AudioNodeData = {
   kind: AudioNodeKind;
   label: string;
@@ -44,6 +47,8 @@ export type AudioNodeData = {
   delay: number;
   /** Left-right balance from -1 (left only) to 1 (right only) */
   balance: number;
+  /** The sliders that stay on the node */
+  pinned: NodeSlider[];
 };
 
 export type AudioNode = Node<AudioNodeData, "audio">;
@@ -75,9 +80,9 @@ type KindMeta = {
    * is its volume in the system mixer, at most 100%. Without this field the node has no volume slider
    */
   maxVolume?: number;
-  /** The node has a delay slider (when the graph's delay sliders are on) */
+  /** The node has a delay slider */
   delay?: boolean;
-  /** The node has a balance slider (when the graph's balance sliders are on): the engine's nodes, not apps */
+  /** The node has a balance slider: the engine's nodes, not apps */
   balance?: boolean;
 };
 
@@ -127,5 +132,12 @@ export const NODE_KINDS: Record<AudioNodeKind, KindMeta> = {
     showDefaults: true,
   },
 };
+
+/** The sliders of a node kind, in the order they are shown */
+export function nodeSliders(kind: AudioNodeKind): NodeSlider[] {
+  const { maxVolume, balance, delay } = NODE_KINDS[kind];
+  const has = { volume: maxVolume, balance, delay };
+  return (["volume", "balance", "delay"] as const).filter((slider) => has[slider]);
+}
 
 export const KIND_ORDER: AudioNodeKind[] = ["input", "app", "system", "cable", "output"];

@@ -158,17 +158,18 @@ button {
 
 /* ---------- node volume and settings ---------- */
 
-/* volume checkbox in a graph row */
-/* the arrow of a graph's options menu: it turns over while the menu is open */
-.ag-graphs__options svg {
+/* the arrow of a graph's or a node's options menu: it turns over while the menu is open */
+.ag-graphs__options svg,
+.ag-node__options svg {
   transition: transform 150ms ease;
 }
 
-.ag-graphs__options.is-open svg {
+.ag-graphs__options.is-open svg,
+.ag-node__options.is-open svg {
   transform: rotate(180deg);
 }
 
-/* a graph's options menu: checkboxes like in the settings, the delay range on the right */
+/* a graph's options menu: checkboxes like in the settings, the delay range field on the right */
 .ag-graph-options {
   display: grid;
   gap: 12px;
@@ -397,7 +398,12 @@ button {
   margin-top: 2px;
 }
 
-.ag-graph-options__check small {
+.ag-graph-options__text {
+  flex: 1;
+}
+
+.ag-graph-options__check small,
+.ag-graph-options__text small {
   display: block;
   margin-top: 3px;
   font-size: 11.5px;
@@ -431,7 +437,6 @@ button {
   border-color: var(--ag-focus);
 }
 
-.ag-graph-options__seconds.is-disabled,
 .ag-graph-options__check.is-disabled > input,
 .ag-graph-options__check.is-disabled > span,
 .ag-settings__check.is-disabled > input,
@@ -1209,6 +1214,86 @@ button {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--accent);
+}
+
+/* in the node's top right corner, on the line of its kind */
+.ag-node__options {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 18px;
+  margin: -2px -6px -2px auto;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ag-text-dim);
+  cursor: pointer;
+}
+
+.ag-node__options:hover,
+.ag-node__options.is-open {
+  color: var(--ag-text);
+  background: var(--ag-hover);
+}
+
+/* a node's options menu: a name above each slider, in the node kind's color */
+.ag-node-options {
+  display: grid;
+  gap: 12px;
+  width: 260px;
+  padding: 10px 12px;
+}
+
+.ag-node-options__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--ag-text-dim);
+}
+
+.ag-node-options__pin {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-right: -4px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--ag-text-dim);
+  cursor: pointer;
+}
+
+.ag-node-options__pin:hover {
+  color: var(--ag-text);
+  background: var(--ag-hover);
+}
+
+.ag-node-options__pin.is-on {
+  color: var(--accent);
+}
+
+.ag-node-options__row .ag-volume,
+.ag-node-options__row .ag-delay {
+  margin-top: 4px;
+}
+
+/* a slider pinned to the node: its name above it */
+.ag-node__slider {
+  margin-top: 8px;
+}
+
+.ag-node__slider > span {
+  font-size: 11px;
+  color: var(--ag-text-dim);
+}
+
+.ag-node__slider .ag-volume,
+.ag-node__slider .ag-delay {
+  margin-top: 4px;
 }
 
 .ag-node__label {

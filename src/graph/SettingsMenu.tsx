@@ -67,7 +67,6 @@ export function SettingsMenu() {
   const language = useSettings((s) => s.language);
   const disableIdleCables = useSettings((s) => s.disableIdleCables);
   const hideMinimap = useSettings((s) => s.hideMinimap);
-  const newGraphVolume = useSettings((s) => s.newGraphVolume);
   const autostart = useSettings((s) => s.autostart);
   const tray = useSettings((s) => s.tray);
   const set = useSettings((s) => s.set);
@@ -163,17 +162,6 @@ export function SettingsMenu() {
             <span>
               {t("settings_hide_minimap")}
               <small>{t("settings_hide_minimap_hint")}</small>
-            </span>
-          </label>
-          <label className="ag-settings__check">
-            <input
-              type="checkbox"
-              checked={newGraphVolume}
-              onChange={(e) => set({ newGraphVolume: e.currentTarget.checked })}
-            />
-            <span>
-              {t("settings_new_graph_volume")}
-              <small>{t("settings_new_graph_volume_hint")}</small>
             </span>
           </label>
           {/* on Linux the tray icon isn't shown everywhere (GNOME without an extension), and quitting is in its menu;

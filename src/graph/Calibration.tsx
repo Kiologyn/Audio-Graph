@@ -155,9 +155,9 @@ function CalibrationDialog({ onClose }: { onClose: () => void }) {
 
   const apply = () => {
     setDelays(Object.fromEntries([...delays].map(([id, delay]) => [id, Math.max(delay, -MAX_DELAY_LIMIT)])));
-    // the sliders must show the delays: turned on, the range wide enough
+    // the sliders must show the delays: the range wide enough
     const range = needed > limit ? Math.min(MAX_DELAY_LIMIT, Math.ceil(needed * 20) / 20) : limit;
-    if (!meta.showDelay || range !== limit) setPrefs(meta.id, { showDelay: true, delayLimit: range });
+    if (range !== limit) setPrefs(meta.id, { delayLimit: range });
     onClose();
   };
 

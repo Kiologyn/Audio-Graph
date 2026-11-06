@@ -391,9 +391,7 @@ fn supervise(
             plan::compile_all(&checked, &listed, &defaults)
         };
         let mut plans = plans;
-        // delays only in graphs that have them turned on
-        let limits: Vec<Option<f32>> = checked.iter().map(|g| g.delay_limit()).collect();
-        plan::apply_delays(&mut plans, running.len(), &limits);
+        plan::apply_delays(&mut plans, running.len());
         // while nothing runs the plan is empty: streams close, apps get their devices back
         let mut merged = plan::merge(&plans[..running.len()]);
         if quiet_until.is_some_and(|t| t > std::time::Instant::now()) {

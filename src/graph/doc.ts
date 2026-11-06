@@ -1,5 +1,14 @@
 import type { Viewport } from "@xyflow/react";
-import { NODE_KINDS, type AudioEdge, type AudioNode, type AudioNodeKind, type AppRef, type DeviceRef } from "./types";
+import {
+  NODE_KINDS,
+  nodeSliders,
+  type AudioEdge,
+  type AudioNode,
+  type AudioNodeKind,
+  type AppRef,
+  type DeviceRef,
+  type NodeSlider,
+} from "./types";
 
 /** The graph file format. Matches graphs.rs, independent of React Flow. */
 export type GraphDoc = {
@@ -11,16 +20,10 @@ export type GraphDoc = {
   viewport: Viewport | null;
   nodes: DocNode[];
   edges: DocEdge[];
-  /** Volume sliders on nodes */
-  showVolume: boolean;
-  /** Delay sliders on output nodes; while off, the graph's delays aren't applied */
-  showDelay: boolean;
   /** The delay sliders' range: from minus this many seconds to plus */
   delayLimit: number;
   /** Start the graph when the app starts with the system */
   startOnLaunch: boolean;
-  /** Balance sliders on nodes; while off, the graph's balances aren't applied */
-  showBalance: boolean;
 };
 
 /** The widest delay slider range, matches MAX_DELAY_LIMIT in graphs.rs */
@@ -39,13 +42,15 @@ export type DocNode = {
   delay: number;
   /** Left-right balance, -1..1 */
   balance: number;
+  /** The sliders that stay on the node */
+  pinned: NodeSlider[];
   position: { x: number; y: number };
 };
 
 export type DocEdge = { id: string; source: string; target: string };
 
 /** What the graph's options menu changes */
-export type GraphPrefs = Pick<GraphDoc, "showVolume" | "showBalance" | "showDelay" | "delayLimit" | "startOnLaunch">;
+export type GraphPrefs = Pick<GraphDoc, "delayLimit" | "startOnLaunch">;
 
 export type GraphMeta = Pick<GraphDoc, "id" | "name" | "createdAt" | "updatedAt"> & GraphPrefs;
 
@@ -65,6 +70,7 @@ export function nodesToDoc(nodes: AudioNode[]): DocNode[] {
       volume: meta.maxVolume ? (n.data.volume ?? 1) : 1,
       delay: meta.delay ? (n.data.delay ?? 0) : 0,
       balance: meta.balance ? (n.data.balance ?? 0) : 0,
+      pinned: nodeSliders(n.data.kind).filter((slider) => n.data.pinned?.includes(slider)),
       position: { x: n.position.x, y: n.position.y },
     };
   });
@@ -89,6 +95,7 @@ export function nodesFromDoc(nodes: DocNode[]): AudioNode[] {
       volume: n.volume ?? 1,
       delay: n.delay ?? 0,
       balance: n.balance ?? 0,
+      pinned: n.pinned ?? [],
     },
   }));
 }
