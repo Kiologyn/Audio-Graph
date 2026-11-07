@@ -151,4 +151,5 @@ export function nodeSliders(kind: AudioNodeKind): NodeSlider[] {
   return (["volume", "balance", "delay"] as const).filter((slider) => has[slider]);
 }
 
-export const KIND_ORDER: AudioNodeKind[] = ["input", "app", "system", "cable", "output"];
+/** The order in the add menu: the devices, what connects them, then what the system runs */
+export const KIND_ORDER: AudioNodeKind[] = ["input", "output", "cable", "app", "system"];

@@ -1238,6 +1238,26 @@ button {
 }
 
 /* a node's options menu: a name above each slider, in the node kind's color */
+.ag-add-node {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px 5px 8px;
+  border: 1px solid var(--ag-border);
+  border-radius: 6px;
+  background: var(--ag-surface);
+  color: var(--ag-text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* the hover color is see-through: it lies over the button's own background, the canvas stays hidden */
+.ag-add-node:hover {
+  background-image: linear-gradient(var(--ag-hover), var(--ag-hover));
+}
+
+/* a node's options menu: a checkbox per slider, in the node kind's color */
 .ag-node-options {
   display: grid;
   gap: 12px;

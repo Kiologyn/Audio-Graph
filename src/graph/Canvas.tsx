@@ -4,6 +4,7 @@ import {
   Controls,
   MarkerType,
   MiniMap,
+  Panel,
   ReactFlow,
   useReactFlow,
   type DefaultEdgeOptions,
@@ -16,7 +17,7 @@ import { useT } from "../i18n";
 import { resolvedTheme, useSettings } from "../settings";
 import AudioNodeView from "./AudioNodeView";
 import { useEngine } from "./engine";
-import { KindIcon } from "./icons";
+import { Icon, KindIcon } from "./icons";
 import { useGraph } from "./store";
 import { KIND_ORDER, NODE_KINDS, type AudioEdge, type AudioNode, type AudioNodeKind } from "./types";
 
@@ -34,6 +35,11 @@ const MINIMAP_COLORS: Record<AudioNodeKind, string> = {
   cable: "#e5a02a",
   system: "#8c96a6",
 };
+
+// about half of a new node: it is placed with its middle where it goes
+const NODE_MIDDLE = { x: 100, y: 45 };
+// how far a new node moves off another one standing right there
+const NODE_STEP = 24;
 
 // an arrow into itself makes no sense; addEdge drops duplicate edges
 const isValidConnection: IsValidConnection<AudioEdge> = (c) => c.source !== c.target;
@@ -135,6 +141,23 @@ export function Canvas() {
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   };
 
+  // the add button: the same menu under it, and the new node goes to the middle of the view
+  const openAddMenu = (e: ReactMouseEvent<HTMLButtonElement>) => {
+    if (menu) {
+      setMenu(null);
+      return;
+    }
+    const box = wrapper.current!.getBoundingClientRect();
+    const button = e.currentTarget.getBoundingClientRect();
+    const middle = screenToFlowPosition({ x: box.left + box.width / 2, y: box.top + box.height / 2 });
+    const flow = { x: middle.x - NODE_MIDDLE.x, y: middle.y - NODE_MIDDLE.y };
+    while (nodes.some((n) => n.position.x === flow.x && n.position.y === flow.y)) {
+      flow.x += NODE_STEP;
+      flow.y += NODE_STEP;
+    }
+    setMenu({ type: "pane", x: button.left - box.left, y: button.bottom - box.top + 4, flow });
+  };
+
   return (
     // the canvas doesn't need the WebView system menu (Back, Refresh, Inspect)
     <div className="ag-canvas" ref={wrapper} onContextMenu={(e) => e.preventDefault()}>
@@ -194,6 +217,12 @@ export function Canvas() {
         }}
       >
         <Background variant={BackgroundVariant.Dots} gap={20} size={1.5} />
+        <Panel position="top-left">
+          <button className="ag-add-node" onClick={openAddMenu}>
+            <Icon name="plus" size={14} />
+            {t("add_node")}
+          </button>
+        </Panel>
         <Controls showInteractive={false} />
         {!hideMinimap && (
           <MiniMap pannable zoomable nodeColor={(n) => MINIMAP_COLORS[(n as AudioNode).data.kind]} />
