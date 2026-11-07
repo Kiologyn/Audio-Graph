@@ -454,13 +454,12 @@ impl Router {
         if restored {
             let _ = self.write_journal();
         }
-        self.apply_volumes(routes, &processes);
+        self.restore_volumes(&processes);
         statuses
     }
 
-    /// App volume in the Windows mixer. At 100% the graph leaves the app's volume alone,
-    /// and if it changed it before, restores the previous one
-    fn apply_volumes(&mut self, routes: &[AppRoute], processes: &HashMap<String, Vec<u32>>) {
+    /// Earlier versions changed app volumes while a graph ran: what their journal holds goes back
+    fn restore_volumes(&mut self, processes: &HashMap<String, Vec<u32>>) {
         let volumes = session_volumes();
         let controls = |exe: &str| -> Vec<&windows::Win32::Media::Audio::ISimpleAudioVolume> {
             processes
@@ -472,28 +471,11 @@ impl Router {
                 .collect()
         };
         let mut changed = false;
-        let mut wanted = HashSet::new();
-        for route in routes.iter().filter(|r| (r.volume - 1.0).abs() > 0.001) {
-            let exe = route.app.exe.to_lowercase();
-            wanted.insert(exe.clone());
-            let list = controls(&exe);
-            let Some(first) = list.first() else { continue };
-            if !self.volumes.iter().any(|v| v.exe == exe) {
-                let previous = unsafe { first.GetMasterVolume() }.unwrap_or(1.0);
-                self.volumes.push(SavedVolume { exe: exe.clone(), previous });
-                changed = true;
-            }
-            for c in list {
-                if unsafe { c.GetMasterVolume() }.is_ok_and(|v| (v - route.volume).abs() > 0.005) {
-                    let _ = unsafe { c.SetMasterVolume(route.volume, std::ptr::null()) };
-                }
-            }
-        }
         let mut kept = Vec::new();
         for saved in std::mem::take(&mut self.volumes) {
             let list = controls(&saved.exe);
-            if wanted.contains(&saved.exe) || list.is_empty() {
-                // still needed or the app has no audio: restore later
+            if list.is_empty() {
+                // the app has no audio: restore later
                 kept.push(saved);
                 continue;
             }
@@ -556,28 +538,18 @@ mod tests {
             app: AppRef { exe, path, name: "test".into() },
             render: Some(Target::Device(vac.clone())),
             capture: None,
-            volume: 0.5,
         };
-        let volume = || {
-            session_volumes()
-                .get(&pid)
-                .and_then(|v| v.first().map(|c| unsafe { c.GetMasterVolume() }.unwrap()))
-        };
-        let volume_before = volume();
         let statuses = router.apply(&[route]);
         let during = router.get(pid, Flow::Render).unwrap();
-        let volume_during = volume();
         let journal = fs::read_to_string(dir.join("app-routing.json")).unwrap_or_default();
-        println!("during: {during:?} volume {volume_during:?} {statuses:?}\njournal: {journal}");
+        println!("during: {during:?} {statuses:?}\njournal: {journal}");
 
         router.apply(&[]);
         let after = router.get(pid, Flow::Render).unwrap();
-        println!("after: {after:?} volume {:?}", volume());
+        println!("after: {after:?}");
         assert_eq!(statuses[0].state, AppState::Routed);
         assert_eq!(during.as_deref(), Some(vac.as_str()));
-        assert_eq!(volume_during, Some(0.5));
         assert_eq!(after, before);
-        assert_eq!(volume(), volume_before);
         assert!(router.saved.is_empty() && router.volumes.is_empty());
     }
 }

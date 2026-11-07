@@ -68,6 +68,7 @@ export function Popover({
   anchor,
   busy,
   footer,
+  minimum = 240,
   onClose,
   children,
 }: {
@@ -75,6 +76,8 @@ export function Popover({
   /** the list is refreshing */
   busy?: boolean;
   footer?: ReactNode;
+  /** The narrowest the menu gets */
+  minimum?: number;
   onClose: () => void;
   children: ReactNode;
 }) {
@@ -96,7 +99,7 @@ export function Popover({
       const below = window.innerHeight - a.bottom - gap - 8;
       const above = a.top - gap - 8;
       const placeBelow = below >= 240 || below >= above;
-      const minWidth = Math.max(a.width, 240);
+      const minWidth = Math.max(a.width, minimum);
       const width = Math.max(el.offsetWidth, minWidth);
       setStyle({
         left: Math.max(8, Math.min(a.left, window.innerWidth - width - 8)),
@@ -109,7 +112,7 @@ export function Popover({
     const observer = new ResizeObserver(place);
     observer.observe(el);
     return () => observer.disconnect();
-  }, [anchor]);
+  }, [anchor, minimum]);
 
   // close on a click outside, Escape, canvas scroll/zoom and window resize
   useEffect(() => {
@@ -129,7 +132,7 @@ export function Popover({
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("resize", onResize);
     };
-  }, [anchor]);
+  }, [anchor, minimum]);
 
   return createPortal(
     <div className="ag-popover" ref={menu} style={style}>

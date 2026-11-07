@@ -4,7 +4,7 @@
 //! A delay is a bigger reserve: the sound waits in the buffer that much longer, and the buffer
 //! grows with it (Streams::apply), so a link only takes the memory its delay needs.
 
-use super::plan::{Gain, MAX_DELAY};
+use super::plan::MAX_DELAY;
 use super::ring::{ring, Consumer, Producer};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -41,10 +41,9 @@ pub fn link() -> (Producer, LinkReader) {
             ring: consumer,
             primed: false,
             average: 0.0,
-            gain: Arc::new([AtomicU32::new(1.0f32.to_bits()), AtomicU32::new(1.0f32.to_bits())]),
-            current_gain: [1.0; CHANNELS],
             delay: Arc::new(AtomicU32::new(0)),
             applied_delay: 0,
+            stage: 0,
         },
     )
 }
@@ -55,21 +54,14 @@ pub struct LinkReader {
     primed: bool,
     /// Average reserve over the last ~half second: the instant one jumps with the packets
     average: f32,
-    /// The link's volume per channel; the engine thread changes it on the fly, the output stream follows smoothly
-    gain: Arc<[AtomicU32; CHANNELS]>,
-    current_gain: Gain,
     /// The delay in frames; the engine thread changes it, the output stream applies it at the next packet
     delay: Arc<AtomicU32>,
     applied_delay: usize,
+    /// The stage of the output device's mix it goes into
+    pub stage: usize,
 }
 
 impl LinkReader {
-    pub fn set_gain(&self, gain: Gain) {
-        for (g, v) in self.gain.iter().zip(gain) {
-            g.store(v.to_bits(), Ordering::Relaxed);
-        }
-    }
-
     /// The link's delay in seconds, at most plan::MAX_DELAY
     pub fn set_delay(&self, seconds: f32) {
         let frames = (seconds.clamp(0.0, MAX_DELAY) * RATE as f32).round() as u32;
@@ -92,14 +84,6 @@ impl LinkReader {
         self.ring = reader;
     }
 
-    /// Mixes the link's sound into out (frames of CHANNELS values)
-    pub fn mix_into(&mut self, out: &mut [f32]) {
-        let to: Gain = std::array::from_fn(|ch| f32::from_bits(self.gain[ch].load(Ordering::Relaxed)));
-        let from = self.current_gain;
-        self.current_gain = to;
-        self.mix_frames(out, from, to);
-    }
-
     /// Brings the reserve to a changed delay; returns the delay in frames
     fn apply_delay(&mut self) -> usize {
         let delay = self.delay.load(Ordering::Relaxed) as usize;
@@ -119,7 +103,8 @@ impl LinkReader {
         delay
     }
 
-    fn mix_frames(&mut self, out: &mut [f32], from: Gain, to: Gain) {
+    /// Mixes the link's sound into out (frames of CHANNELS values)
+    pub fn mix_into(&mut self, out: &mut [f32]) {
         let need = out.len() / CHANNELS;
         let target = TARGET + self.apply_delay();
         let mut available = self.ring.len() / CHANNELS;
@@ -139,35 +124,34 @@ impl LinkReader {
 
         if available < need {
             // recording lags: give what there is and build the reserve again
-            self.ring.mix_into_scaled(&mut out[..available * CHANNELS], from, to);
+            self.ring.mix_into(&mut out[..available * CHANNELS]);
             self.primed = false;
             return;
         }
         if self.average > (target + SLACK) as f32 && available > need + 1 {
             // recording runs fast: the packet takes in a frame more
-            self.mix_stretched(out, need + 1, from, to);
+            self.mix_stretched(out, need + 1);
             return;
         } else if self.average < (target - SLACK) as f32 && need > 1 {
             // recording runs slow: a frame less
-            self.mix_stretched(out, need - 1, from, to);
+            self.mix_stretched(out, need - 1);
             return;
         }
-        self.ring.mix_into_scaled(out, from, to);
+        self.ring.mix_into(out);
     }
 
     /// Plays this many frames of the buffer as the whole packet: the correction is spread over it
     /// (a pitch change of a few cents at most), a frame dropped or repeated at once would click.
     /// The buffer must hold a frame more than that
-    fn mix_stretched(&mut self, out: &mut [f32], frames: usize, from: Gain, to: Gain) {
+    fn mix_stretched(&mut self, out: &mut [f32], frames: usize) {
         let need = out.len() / CHANNELS;
         let step = frames as f32 / need as f32;
         for (i, frame) in out.chunks_exact_mut(CHANNELS).enumerate() {
             let at = i as f32 * step;
             let (whole, part) = (at as usize * CHANNELS, at.fract());
-            let ramp = i as f32 / (need - 1) as f32;
             for (ch, o) in frame.iter_mut().enumerate() {
                 let (a, b) = (self.ring.peek(whole + ch), self.ring.peek(whole + CHANNELS + ch));
-                *o += (a + (b - a) * part) * (from[ch] + (to[ch] - from[ch]) * ramp);
+                *o += a + (b - a) * part;
             }
         }
         self.ring.skip(frames * CHANNELS);
@@ -345,37 +329,5 @@ mod tests {
         assert_eq!(reader.capacity(), capacity_for(0.5));
         assert_eq!(reader.ring.len() / CHANNELS + ms(5500), reserve);
         assert_eq!(run(&producer, &mut reader, 100), 0);
-    }
-
-    #[test]
-    fn balance_quiets_one_channel() {
-        let (producer, mut reader) = link();
-        reader.set_gain([1.0, 0.25]);
-        producer.push(&vec![0.5f32; TARGET * 4 * CHANNELS]);
-        let mut out = vec![0.0f32; 480 * CHANNELS];
-        reader.mix_into(&mut out);
-        // the right channel ramps down over the first packet, then stays a quarter of the left
-        out.fill(0.0);
-        reader.mix_into(&mut out);
-        assert!(out.chunks(2).all(|f| f[0] == 0.5 && (f[1] - 0.125).abs() < 1e-6));
-    }
-
-    #[test]
-    fn gain_ramps_without_jump() {
-        let (producer, mut reader) = link();
-        producer.push(&vec![0.5f32; TARGET * 4 * CHANNELS]);
-        let mut out = vec![0.0f32; 480 * CHANNELS];
-        reader.mix_into(&mut out);
-        assert!(out.iter().all(|&s| s == 0.5));
-        // volume 50%: smoothly from 0.5 to 0.25 over one packet, then a steady 0.25
-        reader.set_gain([0.5; CHANNELS]);
-        out.fill(0.0);
-        reader.mix_into(&mut out);
-        assert_eq!(out[0], 0.5);
-        assert!((out[out.len() - 1] - 0.25).abs() < 1e-6);
-        assert!(out.windows(2).all(|w| w[1] <= w[0]));
-        out.fill(0.0);
-        reader.mix_into(&mut out);
-        assert!(out.iter().all(|&s| (s - 0.25).abs() < 1e-6));
     }
 }

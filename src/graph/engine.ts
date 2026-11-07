@@ -43,6 +43,8 @@ type EngineState = {
   volume: (graphId: string, node: string, volume: number) => void;
   /** Node balance on the fly, the same way */
   balance: (graphId: string, node: string, balance: number) => void;
+  /** A cable's noise gate on the fly, the same way */
+  gate: (graphId: string, node: string, gate: number) => void;
 };
 
 let initOnce = false;
@@ -90,6 +92,10 @@ export const useEngine = create<EngineState>()((set, get) => ({
 
   balance: (graphId, node, balance) => {
     invoke("engine_balance", { graph: graphId, node, balance }).catch(() => {});
+  },
+
+  gate: (graphId, node, gate) => {
+    invoke("engine_gate", { graph: graphId, node, gate }).catch(() => {});
   },
 
   stop: async (graphId) => {

@@ -19,6 +19,7 @@ import AudioNodeView from "./AudioNodeView";
 import { useEngine } from "./engine";
 import { Icon, KindIcon } from "./icons";
 import { useGraph } from "./store";
+import { useSystemVolumePolling } from "./systemVolume";
 import { KIND_ORDER, NODE_KINDS, type AudioEdge, type AudioNode, type AudioNodeKind } from "./types";
 
 const nodeTypes = { audio: AudioNodeView };
@@ -91,6 +92,7 @@ export function Canvas() {
   const theme = useSettings((s) => s.theme);
   const hideMinimap = useSettings((s) => s.hideMinimap);
   const t = useT();
+  useSystemVolumePolling();
 
   // Ctrl+Z undoes, Ctrl+Y and Ctrl+Shift+Z redo. By key code, so it works
   // in other keyboard layouts too. Text fields have the browser's own text undo;

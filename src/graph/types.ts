@@ -3,7 +3,8 @@ import type { Edge, Node } from "@xyflow/react";
 /**
  * Graph node kinds.
  * - input  — an input device (microphone, a cable's recording side): output only
- * - output — an output device (headphones, speakers): input only
+ * - output — an output device (headphones, speakers): input = what to play, output = everything
+ *            playing on the device, also what doesn't come through the graph
  * - app    — an app: output = its sound, input = its microphone
  * - cable  — a cable: an internal mixer or a cable from the shared list (a pair of system devices)
  * - system — the system's default devices: output = sound of the apps playing into the default
@@ -31,7 +32,7 @@ export type AppRef = {
 export type DeviceSlotName = "sink" | "source";
 
 /** A node's sliders. They are in its menu; a pinned one stays on the node too */
-export type NodeSlider = "volume" | "balance" | "delay";
+export type NodeSlider = "volume" | "balance" | "delay" | "gate";
 
 export type AudioNodeData = {
   kind: AudioNodeKind;
@@ -41,15 +42,19 @@ export type AudioNodeData = {
   /** id of a cable from the shared cable list (cables.ts); null is an internal cable */
   cable: string | null;
   app: AppRef | null;
-  /** Volume: 1 is unchanged, 0 is silence, above 1 is gain */
+  /** A cable's volume: 1 is unchanged, 0 is silence, above 1 is gain */
   volume: number;
+  /** What the system's slider of a device or app is set to while the graph runs; null leaves it alone */
+  systemVolume: number | null;
   /**
-   * Delay in seconds. An output's is relative to the other outputs: plus plays later, minus earlier;
+   * Delay in seconds. A device's is a minus, how much earlier it sounds than the rest;
    * a cable's holds back the sound passing through it (from 0)
    */
   delay: number;
-  /** Left-right balance from -1 (left only) to 1 (right only) */
+  /** A cable's left-right balance from -1 (left only) to 1 (right only) */
   balance: number;
+  /** A cable's noise gate in dB: quieter sound is muted; NO_GATE lets everything through */
+  gate: number;
   /** The sliders that stay on the node */
   pinned: NodeSlider[];
 };
@@ -63,6 +68,9 @@ export type DeviceSlot = {
   /** Whether "default" can be chosen (follow the system device) */
   allowDefault: boolean;
 };
+
+/** A noise gate at this level lets everything through; matches NO_GATE in plan.rs */
+export const NO_GATE = -100;
 
 /** The widest volume limit of a graph; matches VOLUME_LIMITS in graphs.rs */
 export const MAX_VOLUME_LIMIT = 10;
@@ -82,18 +90,21 @@ type KindMeta = {
   /** The node shows the current default devices */
   showDefaults?: boolean;
   /**
-   * The most volume the node can have; the graph's limit may be lower. Only the engine applies gain
-   * above 1; an app's volume is its volume in the system mixer, at most 100%. Without this field the node
-   * has no volume slider
+   * The most volume the node can have; the graph's limit may be lower. Without this field
+   * the node has no volume slider
    */
   maxVolume?: number;
+  /** The volume is the system's slider of the device or app, set only while the graph runs */
+  systemVolume?: boolean;
   /**
-   * The node has a delay slider. relative: an output's, from minus the range to plus, relative
-   * to the other outputs; hold: a cable's, from 0, it only holds sound back
+   * The node has a delay slider. earlier: an output's, a minus, how much earlier it sounds than
+   * the rest; hold: a cable's, a plus, it holds sound back
    */
-  delay?: "relative" | "hold";
-  /** The node has a balance slider: the engine's nodes, not apps */
+  delay?: "earlier" | "hold";
+  /** The node has a balance slider: the engine's nodes, not what the system's sliders stand for */
   balance?: boolean;
+  /** The node has a noise gate */
+  gate?: boolean;
 };
 
 export const NODE_KINDS: Record<AudioNodeKind, KindMeta> = {
@@ -103,18 +114,18 @@ export const NODE_KINDS: Record<AudioNodeKind, KindMeta> = {
     hasInput: false,
     hasOutput: true,
     source: { placeholder: "placeholder_no_device", allowDefault: true },
-    maxVolume: MAX_VOLUME_LIMIT,
-    balance: true,
+    maxVolume: 1,
+    systemVolume: true,
   },
   output: {
     title: "node_output",
     defaultLabel: "label_headphones",
     hasInput: true,
-    hasOutput: false,
+    hasOutput: true,
     sink: { placeholder: "placeholder_no_device", allowDefault: true },
-    maxVolume: MAX_VOLUME_LIMIT,
-    balance: true,
-    delay: "relative",
+    maxVolume: 1,
+    systemVolume: true,
+    delay: "earlier",
   },
   app: {
     title: "node_app",
@@ -123,6 +134,7 @@ export const NODE_KINDS: Record<AudioNodeKind, KindMeta> = {
     hasOutput: true,
     pickApp: true,
     maxVolume: 1,
+    systemVolume: true,
   },
   cable: {
     title: "node_cable",
@@ -134,6 +146,7 @@ export const NODE_KINDS: Record<AudioNodeKind, KindMeta> = {
     maxVolume: MAX_VOLUME_LIMIT,
     balance: true,
     delay: "hold",
+    gate: true,
   },
   system: {
     title: "node_system",
@@ -146,9 +159,9 @@ export const NODE_KINDS: Record<AudioNodeKind, KindMeta> = {
 
 /** The sliders of a node kind, in the order they are shown */
 export function nodeSliders(kind: AudioNodeKind): NodeSlider[] {
-  const { maxVolume, balance, delay } = NODE_KINDS[kind];
-  const has = { volume: maxVolume, balance, delay };
-  return (["volume", "balance", "delay"] as const).filter((slider) => has[slider]);
+  const { maxVolume, balance, delay, gate } = NODE_KINDS[kind];
+  const has = { volume: maxVolume, balance, delay, gate };
+  return (["volume", "balance", "delay", "gate"] as const).filter((slider) => has[slider]);
 }
 
 /** The order in the add menu: the devices, what connects them, then what the system runs */

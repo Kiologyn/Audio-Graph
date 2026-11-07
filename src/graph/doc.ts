@@ -1,6 +1,6 @@
 import type { Viewport } from "@xyflow/react";
 import {
-  NODE_KINDS,
+  NODE_KINDS, NO_GATE,
   nodeSliders,
   type AudioEdge,
   type AudioNode,
@@ -40,10 +40,14 @@ export type DocNode = {
   cable: string | null;
   app: AppRef | null;
   volume: number;
+  /** The system's slider while the graph runs; null leaves it alone */
+  systemVolume: number | null;
   /** Output or cable delay in seconds; the engine gets it with autosave */
   delay: number;
   /** Left-right balance, -1..1 */
   balance: number;
+  /** A cable's noise gate in dB */
+  gate: number;
   /** The sliders that stay on the node */
   pinned: NodeSlider[];
   position: { x: number; y: number };
@@ -70,8 +74,10 @@ export function nodesToDoc(nodes: AudioNode[]): DocNode[] {
       cable: meta.pickCable ? (n.data.cable ?? null) : null,
       app: meta.pickApp ? (n.data.app ?? null) : null,
       volume: meta.maxVolume ? (n.data.volume ?? 1) : 1,
+      systemVolume: meta.systemVolume ? (n.data.systemVolume ?? null) : null,
       delay: meta.delay ? (n.data.delay ?? 0) : 0,
       balance: meta.balance ? (n.data.balance ?? 0) : 0,
+      gate: meta.gate ? (n.data.gate ?? NO_GATE) : NO_GATE,
       pinned: nodeSliders(n.data.kind).filter((slider) => n.data.pinned?.includes(slider)),
       position: { x: n.position.x, y: n.position.y },
     };
@@ -95,8 +101,10 @@ export function nodesFromDoc(nodes: DocNode[]): AudioNode[] {
       cable: n.cable ?? null,
       app: n.app ?? null,
       volume: n.volume ?? 1,
+      systemVolume: n.systemVolume ?? null,
       delay: n.delay ?? 0,
       balance: n.balance ?? 0,
+      gate: n.gate ?? NO_GATE,
       pinned: n.pinned ?? [],
     },
   }));

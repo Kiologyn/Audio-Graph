@@ -38,6 +38,7 @@ pub struct Device {
     pub index: u32,
     pub name: String,
     pub description: String,
+    pub volume: ChannelVolumes,
     /// For a source: it is the monitor of an output device (what plays into it), not an input device
     pub monitor_of: Option<u32>,
 }
@@ -133,9 +134,16 @@ pub fn mixer(channels: u8, level: f32) -> ChannelVolumes {
     v
 }
 
-/// A stream's volume slider position: 1.0 is 100%
-pub fn mixer_level(v: &ChannelVolumes) -> f32 {
-    v.avg().0 as f32 / Volume::NORMAL.0 as f32
+/// The same volume at another slider position: the channels keep their balance
+pub fn rescaled(volume: &ChannelVolumes, level: f32) -> ChannelVolumes {
+    let mut v = *volume;
+    v.scale(Volume((level.max(0.0) * Volume::NORMAL.0 as f32).round() as u32));
+    v
+}
+
+/// Where a slider stands when the channels differ: the loudest one, rescaled moves it
+pub fn slider_level(v: &ChannelVolumes) -> f32 {
+    v.max().0 as f32 / Volume::NORMAL.0 as f32
 }
 
 fn describe(e: pa::error::PAErr) -> String {
@@ -265,6 +273,7 @@ impl Pulse {
                 index: i.index,
                 name: i.name.as_deref().unwrap_or_default().to_string(),
                 description: i.description.as_deref().unwrap_or_default().to_string(),
+                volume: i.volume,
                 monitor_of: None,
             }),
             ListResult::Error => dst.borrow_mut().failed = true,
@@ -281,6 +290,7 @@ impl Pulse {
                 index: i.index,
                 name: i.name.as_deref().unwrap_or_default().to_string(),
                 description: i.description.as_deref().unwrap_or_default().to_string(),
+                volume: i.volume,
                 monitor_of: i.monitor_of_sink,
             }),
             ListResult::Error => dst.borrow_mut().failed = true,
@@ -365,6 +375,14 @@ impl Pulse {
 
     pub fn move_source_output(&mut self, index: u32, source: &str) -> Result<(), String> {
         self.confirm(|p, done| p.context.introspect().move_source_output_by_name(index, source, Some(done)))
+    }
+
+    pub fn set_sink_volume(&mut self, name: &str, volume: &ChannelVolumes) -> Result<(), String> {
+        self.confirm(|p, done| p.context.introspect().set_sink_volume_by_name(name, volume, Some(done)))
+    }
+
+    pub fn set_source_volume(&mut self, name: &str, volume: &ChannelVolumes) -> Result<(), String> {
+        self.confirm(|p, done| p.context.introspect().set_source_volume_by_name(name, volume, Some(done)))
     }
 
     pub fn set_sink_input_volume(&mut self, index: u32, volume: &ChannelVolumes) -> Result<(), String> {

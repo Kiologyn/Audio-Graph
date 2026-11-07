@@ -1,12 +1,14 @@
 //! Engine streams: every recording device and every output device gets its own stream, a thread
 //! that the platform provides (win/streams.rs, linux/streams.rs). Recording hands packets
-//! to all links, output mixes its links.
+//! to all links, output plays what its mixer makes of its links.
 
-use super::link::{capacity_for, link, LinkReader};
-use super::plan::{Gain, Stream, LOOPBACK_PREFIX};
+use super::levels::Levels;
+use super::link::{capacity_for, link};
+use super::mixer::Mixer;
+use super::plan::{Stream, LOOPBACK_PREFIX};
 use super::ring::{ring, Producer};
 use super::{DeviceError, StreamStatus};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread::JoinHandle;
@@ -28,13 +30,14 @@ pub(super) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 /// The device at the other end of a link and the link's layer: one source can come into
 /// one output device several times, delayed differently (Stream::layers)
 pub(super) type Peer = (String, usize);
-/// A device's link list; changes on the fly, the stream reads it on every packet
-type Links<T> = Arc<Mutex<Vec<(Peer, T)>>>;
-type Body<T> = fn(&str, &Mutex<Vec<(Peer, T)>>, &AtomicBool, &AtomicBool) -> Result<(), String>;
+/// What a recording device hands its packets to
+pub(super) type Recipients = Vec<(Peer, Producer)>;
+type Body<T> = fn(&str, &Mutex<T>, &AtomicBool, &AtomicBool) -> Result<(), String>;
 
 /// The stream of one device
 pub(super) struct Worker<T> {
-    pub(super) links: Links<T>,
+    /// Changes on the fly, the stream reads it on every packet
+    pub(super) links: Arc<Mutex<T>>,
     stop: Arc<AtomicBool>,
     /// The device is open and sound flows
     working: Arc<AtomicBool>,
@@ -43,10 +46,10 @@ pub(super) struct Worker<T> {
     error: Option<String>,
 }
 
-impl<T: Send + 'static> Worker<T> {
+impl<T: Default + Send + 'static> Worker<T> {
     pub(super) fn new() -> Self {
         Self {
-            links: Arc::new(Mutex::new(Vec::new())),
+            links: Arc::default(),
             stop: Arc::new(AtomicBool::new(false)),
             working: Arc::new(AtomicBool::new(false)),
             thread: None,
@@ -105,7 +108,7 @@ impl<T> Drop for Worker<T> {
     }
 }
 
-fn device_error<T: Send + 'static>(device: &str, worker: Option<&Worker<T>>) -> Option<DeviceError> {
+fn device_error<T: Default + Send + 'static>(device: &str, worker: Option<&Worker<T>>) -> Option<DeviceError> {
     worker.and_then(|w| w.error()).map(|message| DeviceError {
         // a loopback's errors belong to its output device: the interface finds the node by it
         device: device.strip_prefix(LOOPBACK_PREFIX).unwrap_or(device).to_string(),
@@ -115,24 +118,27 @@ fn device_error<T: Send + 'static>(device: &str, worker: Option<&Worker<T>>) -> 
 
 #[derive(Default)]
 pub struct Streams {
-    pub(super) captures: HashMap<String, Worker<Producer>>,
-    pub(super) renders: HashMap<String, Worker<LinkReader>>,
+    pub(super) captures: HashMap<String, Worker<Recipients>>,
+    pub(super) renders: HashMap<String, Worker<Mixer>>,
+    levels: Arc<Levels>,
 }
 
 impl Streams {
+    pub fn new(levels: Arc<Levels>) -> Self {
+        Self { levels, ..Self::default() }
+    }
+
     /// Brings streams in line with the plan on the fly: new links are added, extra ones removed
     pub fn apply(&mut self, plan: &[Stream]) -> Vec<StreamStatus> {
-        // link → volume and delay
-        let wanted: BTreeMap<(&str, &str, usize), (Gain, f32)> = plan
-            .iter()
-            .flat_map(|s| s.layers().map(|(src, layer)| ((src.device.as_str(), s.sink.as_str(), layer), (src.gain, src.delay))))
-            .collect();
+        // link → delay
+        let wanted: BTreeMap<(&str, &str, usize), f32> =
+            plan.iter().flat_map(|s| s.layers().map(|(src, layer)| ((src.device.as_str(), s.sink.as_str(), layer), src.delay))).collect();
 
         for (device, w) in &self.captures {
             lock(&w.links).retain(|((sink, layer), _)| wanted.contains_key(&(device.as_str(), sink.as_str(), *layer)));
         }
         for (device, w) in &self.renders {
-            lock(&w.links).retain(|((source, layer), _)| wanted.contains_key(&(source.as_str(), device.as_str(), *layer)));
+            lock(&w.links).links.retain(|((source, layer), _)| wanted.contains_key(&(source.as_str(), device.as_str(), *layer)));
         }
         for &(source, sink, layer) in wanted.keys() {
             let capture = self.captures.entry(source.to_string()).or_insert_with(Worker::new);
@@ -142,24 +148,36 @@ impl Streams {
             let (producer, reader) = link();
             lock(&capture.links).push(((sink.to_string(), layer), producer));
             let render = self.renders.entry(sink.to_string()).or_insert_with(Worker::new);
-            lock(&render.links).push(((source.to_string(), layer), reader));
+            lock(&render.links).links.push(((source.to_string(), layer), reader));
         }
-        // volume and delay change on the fly without recreating the link
-        for (&(source, sink, layer), &(gain, delay)) in &wanted {
+        // they change on the fly without recreating the link
+        for (&(source, sink, layer), &delay) in &wanted {
             self.fit_buffer((source, sink, layer), delay);
-            let links = lock(&self.renders[sink].links);
-            if let Some((_, reader)) = links.iter().find(|((s, l), _)| s == source && *l == layer) {
-                reader.set_gain(gain);
+            let mixer = lock(&self.renders[sink].links);
+            if let Some((_, reader)) = mixer.links.iter().find(|((s, l), _)| s == source && *l == layer) {
                 reader.set_delay(delay);
             }
         }
+        // stages and the links into them change at one moment: the stream must not see half of it
+        for stream in plan {
+            let Some(render) = self.renders.get(&stream.sink) else { continue };
+            let mut mixer = lock(&render.links);
+            mixer.set_stages(&stream.stages, &self.levels);
+            for (source, layer) in stream.layers() {
+                if let Some((_, reader)) = mixer.links.iter_mut().find(|((s, l), _)| *s == source.device && *l == layer) {
+                    reader.stage = source.stage;
+                }
+            }
+        }
+        let carrying: HashSet<&str> = plan.iter().flat_map(|s| &s.stages).map(|s| s.node.as_str()).collect();
+        self.levels.keep(&carrying);
 
         // devices without links are closed
         let unused: Vec<String> = self.captures.iter().filter(|(_, w)| lock(&w.links).is_empty()).map(|(d, _)| d.clone()).collect();
         for device in unused {
             self.captures.remove(&device).unwrap().shutdown();
         }
-        let unused: Vec<String> = self.renders.iter().filter(|(_, w)| lock(&w.links).is_empty()).map(|(d, _)| d.clone()).collect();
+        let unused: Vec<String> = self.renders.iter().filter(|(_, w)| lock(&w.links).links.is_empty()).map(|(d, _)| d.clone()).collect();
         for device in unused {
             self.renders.remove(&device).unwrap().shutdown();
         }
@@ -188,14 +206,14 @@ impl Streams {
     fn fit_buffer(&self, (source, sink, layer): (&str, &str, usize), delay: f32) {
         let (capture, render) = (&self.captures[source], &self.renders[sink]);
         let capacity = capacity_for(delay);
-        let reader = |(peer, _): &&(Peer, LinkReader)| peer.0 == source && peer.1 == layer;
-        if lock(&render.links).iter().find(reader).is_none_or(|(_, r)| r.capacity() == capacity) {
+        let matches = |peer: &Peer| peer.0 == source && peer.1 == layer;
+        if lock(&render.links).links.iter().find(|(peer, _)| matches(peer)).is_none_or(|(_, r)| r.capacity() == capacity) {
             return;
         }
         let buffer = ring(capacity);
-        let (mut producers, mut readers) = (lock(&capture.links), lock(&render.links));
+        let (mut producers, mut mixer) = (lock(&capture.links), lock(&render.links));
         let producer = producers.iter_mut().find(|((s, l), _)| s == sink && *l == layer);
-        let reader = readers.iter_mut().find(|((s, l), _)| s == source && *l == layer);
+        let reader = mixer.links.iter_mut().find(|(peer, _)| matches(peer));
         if let (Some((_, producer)), Some((_, reader))) = (producer, reader) {
             reader.resize(producer, buffer, delay);
         }
@@ -225,7 +243,7 @@ impl Streams {
             lock(&w.links).retain(|((sink, _), _)| sink != device);
         }
         for w in self.renders.values() {
-            lock(&w.links).retain(|((source, _), _)| source != device);
+            lock(&w.links).links.retain(|((source, _), _)| source != device);
         }
     }
 
@@ -241,29 +259,26 @@ impl Streams {
 
 #[cfg(test)]
 mod tests {
-    use super::super::plan::Source;
+    use super::super::plan::Gain;
     use super::*;
 
-    fn plan(sources: Vec<Source>) -> [Stream; 1] {
-        [Stream { sink: "no.sink".into(), sources, output: true }]
-    }
-
-    fn source(gain: Gain, delay: f32) -> Source {
-        Source { device: "no.source".into(), gain, delay }
+    fn plan(sources: &[(Gain, f32)]) -> [Stream; 1] {
+        let sources: Vec<(&str, Gain, f32)> = sources.iter().map(|&(gain, delay)| ("no.source", gain, delay)).collect();
+        [Stream::through("no.sink", true, &sources)]
     }
 
     /// One source in layers: links are made and removed per layer. The devices don't exist, no sound is played
     #[test]
     fn layers_of_one_source_are_separate_links() {
         let mut streams = Streams::default();
-        let links = |streams: &Streams| (lock(&streams.captures["no.source"].links).len(), lock(&streams.renders["no.sink"].links).len());
+        let links = |streams: &Streams| (lock(&streams.captures["no.source"].links).len(), lock(&streams.renders["no.sink"].links).links.len());
 
-        streams.apply(&plan(vec![source([1.0, 0.0], 0.0), source([0.0, 1.0], 0.5)]));
+        streams.apply(&plan(&[([1.0, 0.0], 0.0), ([0.0, 1.0], 0.5)]));
         assert_eq!(links(&streams), (2, 2));
         // another delay is the same links
-        streams.apply(&plan(vec![source([1.0, 0.0], 0.0), source([0.0, 1.0], 0.3)]));
+        streams.apply(&plan(&[([1.0, 0.0], 0.0), ([0.0, 1.0], 0.3)]));
         assert_eq!(links(&streams), (2, 2));
-        streams.apply(&plan(vec![source([1.0, 1.0], 0.3)]));
+        streams.apply(&plan(&[([1.0, 1.0], 0.3)]));
         assert_eq!(links(&streams), (1, 1));
         streams.shutdown();
     }
@@ -272,13 +287,27 @@ mod tests {
     #[test]
     fn a_link_takes_the_memory_its_delay_needs() {
         let mut streams = Streams::default();
-        let capacity = |streams: &Streams| lock(&streams.renders["no.sink"].links)[0].1.capacity();
-        streams.apply(&plan(vec![source([1.0; 2], 0.0)]));
+        let capacity = |streams: &Streams| lock(&streams.renders["no.sink"].links).links[0].1.capacity();
+        streams.apply(&plan(&[([1.0; 2], 0.0)]));
         assert_eq!(capacity(&streams), capacity_for(0.0));
-        streams.apply(&plan(vec![source([1.0; 2], 300.0)]));
+        streams.apply(&plan(&[([1.0; 2], 300.0)]));
         assert_eq!(capacity(&streams), capacity_for(300.0));
-        streams.apply(&plan(vec![source([1.0; 2], 0.1)]));
+        streams.apply(&plan(&[([1.0; 2], 0.1)]));
         assert_eq!(capacity(&streams), capacity_for(0.1));
+        streams.shutdown();
+    }
+
+    /// Links go into the stages of the plan, whatever order they were made in
+    #[test]
+    fn links_follow_their_stages() {
+        let mut streams = Streams::default();
+        let stages = |streams: &Streams| lock(&streams.renders["no.sink"].links).links.iter().map(|(_, r)| r.stage).collect::<Vec<_>>();
+        streams.apply(&plan(&[([1.0; 2], 0.0), ([1.0; 2], 0.2)]));
+        assert_eq!(stages(&streams), vec![1, 2]);
+        let mut changed = plan(&[([1.0; 2], 0.0), ([1.0; 2], 0.2)]);
+        changed[0].sources[1].stage = 1;
+        streams.apply(&changed);
+        assert_eq!(stages(&streams), vec![1, 1]);
         streams.shutdown();
     }
 }

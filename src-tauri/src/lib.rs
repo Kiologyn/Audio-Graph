@@ -15,6 +15,7 @@ mod log;
 mod pulse;
 mod settings;
 mod storage;
+mod system_volume;
 mod tray;
 
 use tauri::{Manager, RunEvent, WindowEvent};
@@ -111,7 +112,10 @@ pub fn run() {
             engine::engine_stop,
             engine::engine_volume,
             engine::engine_balance,
+            engine::engine_gate,
+            engine::engine_levels,
             engine::engine_quiet,
+            system_volume::system_volumes,
             calibrate::calibrate_measure,
             calibrate::calibrate_preview,
             settings::settings_get,

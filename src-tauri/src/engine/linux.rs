@@ -12,7 +12,8 @@
 
 pub(super) mod streams;
 
-use super::plan::{AppRoute, Plan, Stream as PlanStream, SystemRoute, Target, VirtualCable, VIRTUAL_PREFIX};
+use super::levels::Levels;
+use super::plan::{AppRoute, Plan, Stream as PlanStream, SystemRoute, Target, VirtualCable, LOOPBACK_PREFIX, VIRTUAL_PREFIX};
 use super::streams::Streams;
 use super::{AppState, AppStatus, DeviceError, StreamStatus};
 use crate::apps::linux::{is_app_stream, is_running};
@@ -22,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// The mark in our modules' arguments
@@ -155,7 +157,7 @@ fn is_virtual(name: &str) -> bool {
 }
 
 impl Backend {
-    pub fn new(data_dir: &Path) -> Self {
+    pub fn new(data_dir: &Path, levels: Arc<Levels>) -> Self {
         let journal_path = data_dir.join("pulse-routing.json");
         let journal = fs::read_to_string(&journal_path)
             .ok()
@@ -166,7 +168,7 @@ impl Backend {
             journal_path,
             journal,
             cables: BTreeMap::new(),
-            streams: Streams::default(),
+            streams: Streams::new(levels),
             failed: HashMap::new(),
             user_default: HashMap::new(),
             move_failing: HashMap::new(),
@@ -411,6 +413,7 @@ impl Backend {
     fn unload_cable(&mut self, sink: &str) {
         let Some(cable) = self.cables.remove(sink) else { return };
         self.streams.close(sink);
+        self.streams.close(&format!("{LOOPBACK_PREFIX}{sink}"));
         self.streams.close(&cable.source);
         let Some(p) = self.pulse.as_mut() else { return };
         let _ = p.unload_module(cable.source_module);
@@ -510,7 +513,7 @@ impl Backend {
         .map_err(|e| tr!("error_move_app_audio", error = e))
     }
 
-    /// App devices and volumes per the plan; apps not in the plan get the previous ones
+    /// App devices per the plan; apps not in the plan get the previous ones
     fn apply_routes(&mut self, routes: &[AppRoute], snap: &Snapshot) -> Vec<AppStatus> {
         let streams_of = |flow: Flow, exe: &str| -> Vec<Stream> {
             snap.streams(flow)
@@ -520,7 +523,6 @@ impl Backend {
                 .collect()
         };
         let mut wanted: HashSet<(String, Flow)> = HashSet::new();
-        let mut wanted_volume: HashSet<String> = HashSet::new();
         let mut statuses = Vec::new();
 
         for route in routes {
@@ -532,9 +534,6 @@ impl Backend {
                     wanted.insert((exe.clone(), *flow));
                     relevant += streams_of(*flow, &exe).len();
                 }
-            }
-            if (route.volume - 1.0).abs() > 0.001 {
-                wanted_volume.insert(exe.clone());
             }
             if relevant == 0 {
                 // the device is assigned when the app opens audio
@@ -587,9 +586,6 @@ impl Backend {
                     }
                 }
             }
-            if let Err(e) = self.apply_volume(&exe, route.volume, &streams_of(Flow::Render, &exe)) {
-                error.get_or_insert(e);
-            }
             statuses.push(AppStatus {
                 node: route.node.clone(),
                 state: if error.is_some() { AppState::Failed } else { AppState::Routed },
@@ -627,11 +623,11 @@ impl Backend {
         }
         self.journal.saved = kept;
 
-        // restoring the previous volume
+        // earlier versions changed app volumes while a graph ran: what their journal holds goes back
         let mut kept = Vec::new();
         for saved in std::mem::take(&mut self.journal.volumes) {
             let streams = streams_of(Flow::Render, &saved.exe);
-            if wanted_volume.contains(&saved.exe) || streams.is_empty() {
+            if streams.is_empty() {
                 kept.push(saved);
                 continue;
             }
@@ -647,26 +643,6 @@ impl Backend {
         statuses
     }
 
-    /// The app's mixer volume (at most 100%); at 100% the graph leaves it alone
-    fn apply_volume(&mut self, exe: &str, volume: f32, streams: &[Stream]) -> Result<(), String> {
-        if (volume - 1.0).abs() <= 0.001 {
-            return Ok(());
-        }
-        for s in streams.iter().filter(|s| s.volume_writable) {
-            if !self.journal.volumes.iter().any(|v| v.exe == exe) {
-                self.journal.volumes.push(SavedVolume {
-                    exe: exe.to_string(),
-                    previous: pulse::mixer_level(&s.volume),
-                });
-                self.write_journal()?;
-            }
-            if (pulse::mixer_level(&s.volume) - volume).abs() > 0.005 {
-                self.pulse()?.set_sink_input_volume(s.index, &pulse::mixer(s.volume.len(), volume))?;
-            }
-        }
-        Ok(())
-    }
-
     /// The engine's links per the plan. A stream to a device that isn't there couldn't start:
     /// its link waits, with a clear error right away
     fn apply_links(&mut self, plan: &Plan, snap: &Snapshot) -> Vec<StreamStatus> {
@@ -676,7 +652,10 @@ impl Backend {
             .map(|stream| {
                 let mut stream = stream.clone();
                 let sink = snap.device(Flow::Render, &stream.sink).is_some();
-                stream.sources.retain(|s| sink && snap.device(Flow::Capture, &s.device).is_some());
+                stream.sources.retain(|s| {
+                    let (flow, name) = source_device(&s.device);
+                    sink && snap.device(flow, name).is_some()
+                });
                 stream
             })
             .collect();
@@ -685,11 +664,11 @@ impl Backend {
             .iter()
             .zip(statuses)
             .map(|(stream, status)| {
-                let devices = stream.sources.iter().map(|s| (Flow::Capture, &s.device)).chain([(Flow::Render, &stream.sink)]);
-                let mut missing: Vec<&String> = devices.filter(|(flow, name)| snap.device(*flow, name).is_none()).map(|(_, name)| name).collect();
+                let devices = stream.sources.iter().map(|s| source_device(&s.device)).chain([(Flow::Render, stream.sink.as_str())]);
+                let mut missing: Vec<&str> = devices.filter(|(flow, name)| snap.device(*flow, name).is_none()).map(|(_, name)| name).collect();
                 // the layers of one source
                 missing.dedup();
-                let missing = missing.into_iter().map(|device| DeviceError { device: device.clone(), message: tr!("error_device_not_found") });
+                let missing = missing.into_iter().map(|device| DeviceError { device: device.to_string(), message: tr!("error_device_not_found") });
                 StreamStatus {
                     sink: stream.sink.clone(),
                     sources: stream.sources.iter().map(|s| s.device.clone()).collect(),
@@ -706,6 +685,14 @@ impl Backend {
         for sink in sinks {
             self.unload_cable(&sink);
         }
+    }
+}
+
+/// The device a link's source depends on: a loopback's is the output device it listens to
+fn source_device(source: &str) -> (Flow, &str) {
+    match source.strip_prefix(LOOPBACK_PREFIX) {
+        Some(sink) => (Flow::Render, sink),
+        None => (Flow::Capture, source),
     }
 }
 
@@ -736,7 +723,7 @@ fn unavailable(plan: &Plan, message: &str) -> (Vec<StreamStatus>, Vec<AppStatus>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::plan::Source;
+    use crate::engine::plan::Gain;
     use crate::graphs::AppRef;
     use std::io::{Read, Write};
     use std::process::{Child, Command, Stdio};
@@ -759,6 +746,10 @@ mod tests {
             ];
             assert!(modules.iter().all(|m| m.parse::<u32>().is_ok()), "test devices: {modules:?}");
             std::thread::sleep(Duration::from_millis(300));
+            // the server remembers a device's volume by its name, also from an earlier test
+            pactl(&["set-sink-volume", "agtest.out", "100%"]);
+            pactl(&["set-sink-volume", "agtest.mic", "100%"]);
+            pactl(&["set-source-volume", "agtest.mic.src", "100%"]);
             Self(modules)
         }
     }
@@ -775,7 +766,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ag-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
-        (Backend::new(&dir), dir)
+        (Backend::new(&dir, Default::default()), dir)
     }
 
     /// A few engine ticks: PipeWire finishes what it creates after answering
@@ -856,8 +847,8 @@ mod tests {
         let plan = Plan {
             virtual_cables: vec![cable()],
             streams: vec![
-                PlanStream { output: false, sink: "audiograph.t1".into(), sources: vec![Source { device: "agtest.mic.src".into(), gain: [1.0; 2], delay: 0.0 }] },
-                PlanStream { output: true, sink: "agtest.out".into(), sources: vec![Source { device: "audiograph.t1.out".into(), gain: [0.5; 2], delay: 0.0 }] },
+                PlanStream::through("audiograph.t1", false, &[("agtest.mic.src", [1.0; 2], 0.0)]),
+                PlanStream::through("agtest.out", true, &[("audiograph.t1.out", [0.5; 2], 0.0)]),
             ],
             ..Plan::default()
         };
@@ -882,7 +873,7 @@ mod tests {
         let louder = Plan {
             streams: vec![
                 plan.streams[0].clone(),
-                PlanStream { output: true, sink: "agtest.out".into(), sources: vec![Source { device: "audiograph.t1.out".into(), gain: [1.0; 2], delay: 0.0 }] },
+                PlanStream::through("agtest.out", true, &[("audiograph.t1.out", [1.0; 2], 0.0)]),
             ],
             ..plan.clone()
         };
@@ -895,7 +886,7 @@ mod tests {
         let balanced = Plan {
             streams: vec![
                 plan.streams[0].clone(),
-                PlanStream { output: true, sink: "agtest.out".into(), sources: vec![Source { device: "audiograph.t1.out".into(), gain: [1.0, 0.25], delay: 0.0 }] },
+                PlanStream::through("agtest.out", true, &[("audiograph.t1.out", [1.0, 0.25], 0.0)]),
             ],
             ..plan.clone()
         };
@@ -928,17 +919,16 @@ mod tests {
     fn layers_of_one_source_share_the_device_streams() {
         let _devices = Devices::new();
         let (mut backend, _) = backend();
-        let source = |gain, delay| Source { device: "agtest.mic.src".into(), gain, delay };
-        let plan = |sources| Plan {
-            streams: vec![PlanStream { output: true, sink: "agtest.out".into(), sources }],
-            ..Plan::default()
+        let plan = |sources: &[(Gain, f32)]| {
+            let sources: Vec<(&str, Gain, f32)> = sources.iter().map(|&(gain, delay)| ("agtest.mic.src", gain, delay)).collect();
+            Plan { streams: vec![PlanStream::through("agtest.out", true, &sources)], ..Plan::default() }
         };
-        ticks(&mut backend, &plan(vec![source([1.0, 0.0], 0.0), source([0.0, 1.0], 0.2)]));
+        ticks(&mut backend, &plan(&[([1.0, 0.0], 0.0), ([0.0, 1.0], 0.2)]));
         // one recording and one playback stream, whatever the links between them
         assert_eq!(link_streams(), 2);
         let [left, right] = tone_rms_channels("agtest.mic", "agtest.out.monitor");
         assert!(left > 0.2 && right > 0.2, "RMS {left} {right}");
-        ticks(&mut backend, &plan(vec![source([1.0, 1.0], 0.0)]));
+        ticks(&mut backend, &plan(&[([1.0, 1.0], 0.0)]));
         assert_eq!(link_streams(), 2);
         ticks(&mut backend, &Plan::default());
         assert_eq!(link_streams(), 0);
@@ -1001,7 +991,7 @@ mod tests {
         let _devices = Devices::new();
         let (mut backend, _) = backend();
         let plan = |delay| Plan {
-            streams: vec![PlanStream { output: true, sink: "agtest.out".into(), sources: vec![Source { device: "agtest.mic.src".into(), gain: [1.0; 2], delay }] }],
+            streams: vec![PlanStream::through("agtest.out", true, &[("agtest.mic.src", [1.0; 2], delay)])],
             ..Plan::default()
         };
         ticks(&mut backend, &plan(0.0));
@@ -1029,8 +1019,8 @@ mod tests {
         let plan = Plan {
             virtual_cables: vec![cable()],
             streams: vec![
-                PlanStream { output: false, sink: "audiograph.t1".into(), sources: vec![Source { device: "agtest.mic.src".into(), gain: [1.0; 2], delay: 0.0 }] },
-                PlanStream { output: true, sink: "agtest.out".into(), sources: vec![Source { device: "audiograph.t1.out".into(), gain: [1.0; 2], delay: 0.0 }] },
+                PlanStream::through("audiograph.t1", false, &[("agtest.mic.src", [1.0; 2], 0.0)]),
+                PlanStream::through("agtest.out", true, &[("audiograph.t1.out", [1.0; 2], 0.0)]),
             ],
             ..Plan::default()
         };
@@ -1082,7 +1072,7 @@ mod tests {
         let _out = Devices::new();
         let (mut backend, _) = backend();
         let plan = Plan {
-            streams: vec![PlanStream { output: true, sink: "agtest.gone".into(), sources: vec![Source { device: "agtest.mic.src".into(), gain: [1.0; 2], delay: 0.0 }] }],
+            streams: vec![PlanStream::through("agtest.gone", true, &[("agtest.mic.src", [1.0; 2], 0.0)])],
             ..Plan::default()
         };
         // not there yet: a clear error, no stream
@@ -1117,6 +1107,182 @@ mod tests {
         ticks(&mut backend, &Plan::default());
         assert_eq!(link_streams(), 0);
         pactl(&["unload-module", &module]);
+    }
+
+    /// What plays on a device reaches another one through its monitor, though no link plays it there.
+    /// A missing device is reported under the output device's own name, as the interface looks for it
+    #[test]
+    #[ignore]
+    fn output_passes_its_device_on() {
+        let _devices = Devices::new();
+        let (mut backend, _) = backend();
+        let stream = |device: &str| PlanStream::through("agtest.out", true, &[(&format!("{LOOPBACK_PREFIX}{device}"), [0.5; 2], 0.0)]);
+        let plan = Plan { streams: vec![stream("agtest.mic")], ..Plan::default() };
+        let (streams, _) = ticks(&mut backend, &plan);
+        assert!(streams[0].errors.is_empty(), "{streams:?}");
+        assert_eq!(link_streams(), 2);
+        settle();
+        let rms = tone_rms("agtest.mic", "agtest.out.monitor");
+        println!("output RMS: {rms:.3} (0.177 at 50%)");
+        assert!((rms - 0.177).abs() < 0.03, "RMS {rms}");
+
+        let plan = Plan { streams: vec![stream("agtest.gone")], ..Plan::default() };
+        let (streams, _) = ticks(&mut backend, &plan);
+        assert_eq!(streams[0].errors.len(), 1, "{streams:?}");
+        assert_eq!(streams[0].errors[0].device, "agtest.gone");
+        assert_eq!(link_streams(), 0);
+    }
+
+    /// Nothing plays on the device, yet its monitor keeps giving sound: the pauses stay in a link
+    #[test]
+    #[ignore]
+    fn silent_monitor_keeps_time() {
+        use crate::engine::link::{CHANNELS, RATE};
+        use crate::engine::ring::ring;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Mutex;
+        let _devices = Devices::new();
+        settle();
+        let (producer, reader) = ring(RATE * CHANNELS * 8);
+        let links = Mutex::new(vec![((String::new(), 0), producer)]);
+        let (stop, working) = (AtomicBool::new(false), AtomicBool::new(false));
+        let device = format!("{LOOPBACK_PREFIX}agtest.out");
+        let frames = std::thread::scope(|s| {
+            let thread = s.spawn(|| super::streams::capture_thread(&device, &links, &stop, &working));
+            // PulseAudio's null-sink starts up to 2 s late, then it runs evenly
+            std::thread::sleep(Duration::from_secs(3));
+            let start = reader.len();
+            std::thread::sleep(Duration::from_secs(2));
+            let frames = (reader.len() - start) / CHANNELS;
+            stop.store(true, Ordering::Relaxed);
+            thread.join().unwrap().unwrap();
+            frames
+        });
+        println!("{frames} frames in 2 s");
+        assert!(frames > RATE * 3 / 2, "{frames}");
+    }
+
+    /// An app and the default microphone can listen to an output's monitor
+    #[test]
+    #[ignore]
+    fn monitor_is_a_recording_device_for_apps() {
+        let _devices = Devices::new();
+        let (mut backend, _) = backend();
+        let _recorder = spawn("parec", &["--device", "agtest.mic.src", "--raw", "--format=s16le", "--rate=48000", "--channels=2"]);
+        std::thread::sleep(Duration::from_millis(700));
+        let before = pactl(&["get-default-source"]);
+        let plan = Plan {
+            routes: vec![AppRoute {
+                node: "app".into(),
+                app: AppRef { exe: "pacat".into(), path: String::new(), name: "pacat".into() },
+                render: None,
+                capture: Some(Target::Device("agtest.out.monitor".into())),
+            }],
+            system: Some(SystemRoute { node: "sys".into(), render: None, capture: Some("agtest.out.monitor".into()) }),
+            ..Plan::default()
+        };
+        let (_, apps) = ticks(&mut backend, &plan);
+        println!("during: {:?} {apps:?}, default {}", parec_source(), pactl(&["get-default-source"]));
+        assert!(apps.iter().all(|a| a.error.is_none()), "{apps:?}");
+        assert_eq!(parec_source().as_deref(), Some("agtest.out.monitor"));
+        assert_eq!(pactl(&["get-default-source"]), "agtest.out.monitor");
+        ticks(&mut backend, &Plan::default());
+        assert_eq!(parec_source().as_deref(), Some("agtest.mic.src"));
+        assert_eq!(pactl(&["get-default-source"]), before);
+    }
+
+    /// A noise gate on a real server: the tone's peak is 0.5, about -6 dB
+    #[test]
+    #[ignore]
+    fn a_gate_mutes_what_is_quieter() {
+        let _devices = Devices::new();
+        let (mut backend, _) = backend();
+        let plan = |gate| {
+            let mut stream = PlanStream::through("agtest.out", true, &[("agtest.mic.src", [1.0; 2], 0.0)]);
+            stream.stages[1].gate = gate;
+            Plan { streams: vec![stream], ..Plan::default() }
+        };
+        ticks(&mut backend, &plan(-20.0));
+        settle();
+        let rms = tone_rms("agtest.mic", "agtest.out.monitor");
+        println!("gate -20 dB: {rms:.3}");
+        assert!((rms - 0.354).abs() < 0.04, "RMS {rms}");
+        ticks(&mut backend, &plan(-3.0));
+        std::thread::sleep(Duration::from_millis(500));
+        let rms = tone_rms("agtest.mic", "agtest.out.monitor");
+        println!("gate -3 dB: {rms:.3}");
+        assert!(rms < 0.001, "RMS {rms}");
+    }
+
+    /// The sliders of nodes are the server's: what is set is what pactl sees, and the other way round.
+    /// The default device is found, what isn't there gives nothing
+    #[test]
+    #[ignore]
+    fn system_sliders_are_the_servers() {
+        use crate::system_volume::{system_volumes, write_volume, Target};
+        let _devices = Devices::new();
+        let sink = Target::Device { flow: crate::devices::Flow::Render, id: Some("agtest.out".into()) };
+        let source = Target::Device { flow: crate::devices::Flow::Capture, id: Some("agtest.mic.src".into()) };
+        let near = |value: Option<f32>, level: f32| value.is_some_and(|v| (v - level).abs() < 0.01);
+
+        write_volume(&sink, 0.5).unwrap();
+        write_volume(&source, 0.25).unwrap();
+        assert!(pactl(&["get-sink-volume", "agtest.out"]).contains("50%"));
+        assert!(pactl(&["get-source-volume", "agtest.mic.src"]).contains("25%"));
+        let read = system_volumes(vec![sink.clone(), source.clone()]);
+        assert!(near(read[0], 0.5) && near(read[1], 0.25), "{read:?}");
+
+        pactl(&["set-sink-volume", "agtest.out", "75%"]);
+        assert!(near(system_volumes(vec![sink.clone()])[0], 0.75));
+
+        // the balance stays
+        pactl(&["set-sink-volume", "agtest.out", "100%", "50%"]);
+        write_volume(&sink, 0.5).unwrap();
+        let shown = pactl(&["get-sink-volume", "agtest.out"]);
+        assert!(shown.contains("50%") && shown.contains("25%"), "{shown}");
+
+        pactl(&["set-default-sink", "agtest.out"]);
+        let default = Target::Device { flow: crate::devices::Flow::Render, id: None };
+        assert!(near(system_volumes(vec![default])[0], 0.5));
+
+        let gone = Target::Device { flow: crate::devices::Flow::Render, id: Some("agtest.gone".into()) };
+        assert_eq!(system_volumes(vec![gone, Target::App { exe: "pacat".into() }]), vec![None, None]);
+
+        let _player = spawn("pacat", &["--device", "agtest.mic", "--raw", "--format=s16le", "--rate=48000", "--channels=2", "/dev/zero"]);
+        std::thread::sleep(Duration::from_millis(700));
+        let app = Target::App { exe: "pacat".into() };
+        assert!(near(system_volumes(vec![app.clone()])[0], 1.0));
+        write_volume(&app, 0.5).unwrap();
+        assert!(near(system_volumes(vec![app])[0], 0.5));
+        assert_eq!(pacat_stream().map(|s| s.1).as_deref(), Some("50%"));
+    }
+
+    /// What a running graph sets goes back when it stops; a stopped graph sets nothing
+    #[test]
+    #[ignore]
+    fn a_graph_sets_a_slider_while_it_runs() {
+        use crate::graphs::{Graph, GraphNode};
+        let _devices = Devices::new();
+        use crate::system_volume::VolumeMemory;
+        let (_, dir) = backend();
+        pactl(&["set-sink-volume", "agtest.out", "80%"]);
+        let node: GraphNode = serde_json::from_value(serde_json::json!({
+            "id": "o", "kind": "output", "label": "o", "position": {"x": 0, "y": 0},
+            "sink": {"type": "device", "id": "agtest.out", "name": "o"}, "systemVolume": 0.4
+        }))
+        .unwrap();
+        let graph: Graph = serde_json::from_value(serde_json::json!({"id": "g", "name": "g", "createdAt": 0, "updatedAt": 0, "nodes": [node]})).unwrap();
+        let memory = VolumeMemory::new(&dir);
+        memory.follow(&[]);
+        assert!(pactl(&["get-sink-volume", "agtest.out"]).contains("80%"));
+        memory.follow(&[&graph]);
+        assert!(pactl(&["get-sink-volume", "agtest.out"]).contains("40%"));
+        // the slider moves on its own while the graph runs, and the graph lets it
+        pactl(&["set-sink-volume", "agtest.out", "60%"]);
+        memory.follow(&[&graph]);
+        assert!(pactl(&["get-sink-volume", "agtest.out"]).contains("60%"));
+        memory.follow(&[]);
+        assert!(pactl(&["get-sink-volume", "agtest.out"]).contains("80%"));
     }
 
     /// A process that is closed with the test, even if the test fails
@@ -1173,7 +1339,6 @@ mod tests {
                 app: AppRef { exe: "pacat".into(), path: String::new(), name: "pacat".into() },
                 render: Some(Target::Device("agtest.out".into())),
                 capture: None,
-                volume: 0.5,
             }],
             ..Plan::default()
         };
@@ -1182,7 +1347,7 @@ mod tests {
         assert_eq!(apps[0].state, AppState::Routed, "{apps:?}");
         let during = pacat_stream();
         println!("during: {during:?}, journal: {}", fs::read_to_string(dir.join("pulse-routing.json")).unwrap_or_default());
-        assert_eq!(during, Some(("agtest.out".to_string(), "50%".to_string())));
+        assert_eq!(during, Some(("agtest.out".to_string(), "100%".to_string())));
 
         ticks(&mut backend, &Plan::default());
         let after = pacat_stream();
@@ -1218,7 +1383,6 @@ mod tests {
                 app: AppRef { exe: "pacat".into(), path: String::new(), name: "pacat".into() },
                 render: Some(Target::Device("agtest.out".into())),
                 capture: Some(Target::Device("agtest.mic.src".into())),
-                volume: 1.0,
             }],
             ..Plan::default()
         };
@@ -1267,7 +1431,7 @@ mod tests {
         let (mut backend, _) = backend();
         let plan = |label: &str| Plan {
             virtual_cables: vec![VirtualCable { label: label.into(), ..cable() }],
-            streams: vec![PlanStream { output: true, sink: "agtest.out".into(), sources: vec![Source { device: "audiograph.t1.out".into(), gain: [1.0; 2], delay: 0.0 }] }],
+            streams: vec![PlanStream::through("agtest.out", true, &[("audiograph.t1.out", [1.0; 2], 0.0)])],
             ..Plan::default()
         };
         ticks(&mut backend, &plan("First"));
@@ -1297,15 +1461,14 @@ mod tests {
         let plan = |label: &str| Plan {
             virtual_cables: vec![VirtualCable { label: label.into(), ..cable() }],
             streams: vec![
-                PlanStream { output: false, sink: "audiograph.t1".into(), sources: vec![Source { device: "agtest.mic.src".into(), gain: [1.0; 2], delay: 0.0 }] },
-                PlanStream { output: true, sink: "agtest.out".into(), sources: vec![Source { device: "audiograph.t1.out".into(), gain: [0.7; 2], delay: 0.0 }] },
+                PlanStream::through("audiograph.t1", false, &[("agtest.mic.src", [1.0; 2], 0.0)]),
+                PlanStream::through("agtest.out", true, &[("audiograph.t1.out", [0.7; 2], 0.0)]),
             ],
             routes: vec![AppRoute {
                 node: "app".into(),
                 app: AppRef { exe: "pacat".into(), path: String::new(), name: "pacat".into() },
                 render: Some(Target::Device("audiograph.t1".into())),
                 capture: None,
-                volume: 1.0,
             }],
             ..Plan::default()
         };

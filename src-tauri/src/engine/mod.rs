@@ -4,10 +4,13 @@
 //! One supervisor thread does it all: it receives changes, checks the system every TICK,
 //! rebuilds the plan (plan.rs) and brings audio streams and app devices in line with it.
 
+mod levels;
 #[cfg(any(windows, target_os = "linux"))]
 mod link;
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(any(windows, target_os = "linux"))]
+mod mixer;
 pub(crate) mod plan;
 #[cfg(any(windows, target_os = "linux"))]
 mod ring;
@@ -23,9 +26,12 @@ use crate::devices::{AudioDevice, Flow};
 use crate::graphs::{DeviceRef, Graph, GraphStore, NodeKind};
 use crate::settings::Settings;
 use crate::storage::CmdResult;
+use crate::system_volume::VolumeMemory;
+use levels::Levels;
 use plan::Issue;
+pub use plan::NO_GATE;
 use serde::Serialize;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
@@ -103,7 +109,7 @@ struct Backend;
 
 #[cfg(not(any(windows, target_os = "linux")))]
 impl Backend {
-    fn new(_: &Path) -> Self {
+    fn new(_: &Path, _: Arc<Levels>) -> Self {
         Backend
     }
     fn defaults(&self) -> plan::Defaults {
@@ -138,6 +144,8 @@ enum Msg {
     Volume { graph: String, node: String, volume: f32 },
     /// A balance slider is moving, the same way
     Balance { graph: String, node: String, balance: f32 },
+    /// A noise gate slider is moving, the same way
+    Gate { graph: String, node: String, gate: f32 },
     /// Settings changed: message and tray language, turning cables off
     Settings { disable_idle_cables: bool },
     /// A device was plugged in, unplugged, turned on or off: reconnect at once
@@ -152,13 +160,17 @@ enum Msg {
 pub struct Engine {
     tx: mpsc::Sender<Msg>,
     status: Arc<Mutex<EngineStatus>>,
+    levels: Arc<Levels>,
 }
 
 impl Engine {
     pub fn new(app: AppHandle, data_dir: PathBuf, cables: Vec<Cable>, settings: &Settings) -> Self {
+        let volumes = VolumeMemory::new(&data_dir);
         let (tx, rx) = mpsc::channel();
         let status = Arc::new(Mutex::new(EngineStatus::default()));
         let shared = status.clone();
+        let levels = Arc::new(Levels::default());
+        let measured = levels.clone();
         let disable_idle_cables = settings.disable_idle_cables;
         let watcher = tx.clone();
         crate::devices::watch(move || {
@@ -166,9 +178,9 @@ impl Engine {
         });
         std::thread::Builder::new()
             .name("audio engine".into())
-            .spawn(move || supervise(rx, app, &data_dir, cables, disable_idle_cables, &shared))
+            .spawn(move || supervise(rx, app, &data_dir, cables, disable_idle_cables, &shared, &volumes, measured))
             .expect("failed to start the engine thread");
-        Self { tx, status }
+        Self { tx, status, levels }
     }
 
     fn send(&self, msg: Msg) {
@@ -256,10 +268,12 @@ fn supervise(
     mut cables: Vec<Cable>,
     mut disable_idle_cables: bool,
     status: &Mutex<EngineStatus>,
+    volumes: &VolumeMemory,
+    levels: Arc<Levels>,
 ) {
     #[cfg(windows)]
     let _com = crate::com::ComGuard::init();
-    let mut backend = Backend::new(data_dir);
+    let mut backend = Backend::new(data_dir, levels);
     let mut opened: Option<Graph> = None;
     // in start order: when graphs contend for an app or the default devices, the one started first wins
     let mut running: Vec<Graph> = Vec::new();
@@ -317,14 +331,30 @@ fn supervise(
                 Msg::Volume { graph, node, volume } => {
                     for g in running.iter_mut().chain(opened.as_mut()).filter(|g| g.id == graph) {
                         if let Some(n) = g.nodes.iter_mut().find(|n| n.id == node) {
-                            n.volume = volume;
+                            if n.kind == NodeKind::Cable {
+                                n.volume = volume;
+                            } else {
+                                n.system_volume = Some(volume);
+                            }
                         }
+                    }
+                    // the slider of a device or app moves at once, for a running graph only
+                    let moved = running.iter().find(|g| g.id == graph).and_then(|g| g.nodes.iter().find(|n| n.id == node));
+                    if let Some(target) = moved.and_then(crate::system_volume::node_target) {
+                        volumes.set(&graph, &target, volume);
                     }
                 }
                 Msg::Balance { graph, node, balance } => {
                     for g in running.iter_mut().chain(opened.as_mut()).filter(|g| g.id == graph) {
                         if let Some(n) = g.nodes.iter_mut().find(|n| n.id == node) {
                             n.balance = balance;
+                        }
+                    }
+                }
+                Msg::Gate { graph, node, gate } => {
+                    for g in running.iter_mut().chain(opened.as_mut()).filter(|g| g.id == graph) {
+                        if let Some(n) = g.nodes.iter_mut().find(|n| n.id == node) {
+                            n.gate = gate;
                         }
                     }
                 }
@@ -397,9 +427,10 @@ fn supervise(
         // while nothing runs the plan is empty: streams close, apps get their devices back
         let mut merged = plan::merge(&plans[..running.len()]);
         if quiet_until.is_some_and(|t| t > std::time::Instant::now()) {
-            merged.streams.iter_mut().flat_map(|s| &mut s.sources).for_each(|s| s.gain = [0.0; 2]);
+            merged.streams.iter_mut().for_each(|s| s.stages[0].gain = [0.0; 2]);
         }
         let (streams, apps) = backend.apply(&merged);
+        volumes.follow(&checked[..running.len()]);
         let shown = opened.as_ref().or(running.first());
         let issues = shown
             .and_then(|s| checked.iter().position(|g| g.id == s.id))
@@ -550,6 +581,21 @@ pub fn engine_balance(engine: State<Engine>, graph: String, node: String, balanc
         node,
         balance: balance.clamp(-1.0, 1.0),
     });
+}
+
+#[tauri::command]
+pub fn engine_gate(engine: State<Engine>, graph: String, node: String, gate: f32) {
+    engine.send(Msg::Gate {
+        graph,
+        node,
+        gate: gate.clamp(NO_GATE, 0.0),
+    });
+}
+
+/// How loud the sound coming into each node was since the last call, for the meters: the loudest sample value
+#[tauri::command]
+pub fn engine_levels(engine: State<Engine>) -> HashMap<String, f32> {
+    engine.levels.take()
 }
 
 #[tauri::command]

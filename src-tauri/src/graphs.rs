@@ -22,6 +22,10 @@ fn full_volume() -> f32 {
     1.0
 }
 
+fn no_gate() -> f32 {
+    crate::engine::NO_GATE
+}
+
 fn half_second() -> f32 {
     0.5
 }
@@ -93,17 +97,23 @@ pub struct GraphNode {
     /// The app an app node stands for
     #[serde(default)]
     pub app: Option<AppRef>,
-    /// Volume: 1 is unchanged, 0 is silence, above 1 is gain (engine streams only)
+    /// A cable's volume: 1 is unchanged, 0 is silence, above 1 is gain
     #[serde(default = "full_volume")]
     pub volume: f32,
-    /// Delay in seconds. An output's is relative to the other outputs: plus plays later, minus earlier;
+    /// What the system's slider of a device or app is set to while the graph runs; none leaves it alone
+    #[serde(default, rename = "systemVolume")]
+    pub system_volume: Option<f32>,
+    /// Delay in seconds. A device's is a minus, how much earlier it sounds than the rest;
     /// a cable's holds back the sound passing through it (from 0)
     #[serde(default)]
     pub delay: f32,
     /// Left-right balance from -1 (left only) to 1 (right only); engine streams only
     #[serde(default)]
     pub balance: f32,
-    /// The sliders that stay on the node, not only in its menu: "volume", "balance", "delay"
+    /// A cable's noise gate in dB: quieter sound is muted, -100 lets everything through
+    #[serde(default = "no_gate")]
+    pub gate: f32,
+    /// The sliders that stay on the node, not only in its menu: "volume", "balance", "delay", "gate"
     #[serde(default)]
     pub pinned: Vec<String>,
     pub position: Position,
@@ -179,6 +189,12 @@ impl Graph {
         }
         self.show_delay = None;
         self.show_balance = None;
+        // outputs could also play later than the others: now the others play earlier by as much
+        let outputs = || self.nodes.iter().filter(|n| n.kind == NodeKind::Output);
+        let latest = outputs().map(|n| n.delay).fold(0.0, f32::max);
+        for node in self.nodes.iter_mut().filter(|n| n.kind == NodeKind::Output) {
+            node.delay -= latest;
+        }
         self
     }
 }
@@ -639,7 +655,7 @@ mod tests {
         let file = |delay: bool, balance: bool| {
             format!(
                 r#"{{"id":"g","name":"Old","createdAt":1,"updatedAt":1,"showVolume":false,"showDelay":{delay},"showBalance":{balance},
-                    "nodes":[{{"id":"o","kind":"output","label":"Speakers","position":{{"x":0,"y":0}},"delay":0.3,"balance":-1.0}}]}}"#
+                    "nodes":[{{"id":"o","kind":"output","label":"Speakers","position":{{"x":0,"y":0}},"delay":-0.3,"balance":-1.0}}]}}"#
             )
         };
         let node = |text: String| {
@@ -647,15 +663,38 @@ mod tests {
             (g.nodes[0].delay, g.nodes[0].balance)
         };
         assert_eq!(node(file(false, false)), (0.0, 0.0));
-        assert_eq!(node(file(true, false)), (0.3, 0.0));
+        assert_eq!(node(file(true, false)), (-0.3, 0.0));
         assert_eq!(node(file(false, true)), (0.0, -1.0));
-        assert_eq!(node(file(true, true)), (0.3, -1.0));
+        assert_eq!(node(file(true, true)), (-0.3, -1.0));
 
         // the flags aren't written back, and a file without them keeps its values
         let g = serde_json::from_str::<Graph>(&file(true, true)).unwrap().upgraded();
         let text = serde_json::to_string(&g).unwrap();
         assert!(!text.contains("showDelay") && !text.contains("showBalance"), "{text}");
-        assert_eq!(node(text), (0.3, -1.0));
+        assert_eq!(node(text), (-0.3, -1.0));
+    }
+
+    /// Outputs could play later than the others: the same difference now is the others playing earlier
+    #[test]
+    fn a_later_output_becomes_earlier_others() {
+        let text = r#"{"id":"g","name":"Old","createdAt":1,"updatedAt":1,"nodes":[
+            {"id":"a","kind":"output","label":"a","position":{"x":0,"y":0},"delay":0.5},
+            {"id":"b","kind":"output","label":"b","position":{"x":0,"y":0},"delay":0.25},
+            {"id":"c","kind":"cable","label":"c","position":{"x":0,"y":0},"delay":0.75}]}"#;
+        let g = serde_json::from_str::<Graph>(text).unwrap().upgraded();
+        let delays: Vec<f32> = g.nodes.iter().map(|n| n.delay).collect();
+        assert_eq!(delays, vec![0.0, -0.25, 0.75]);
+    }
+
+    /// A node's setting of the system's slider survives saving, and old files have none
+    #[test]
+    fn system_volume_is_kept_in_the_file() {
+        let text = r#"{"id":"o","kind":"output","label":"o","position":{"x":0,"y":0},"systemVolume":0.25}"#;
+        let node: GraphNode = serde_json::from_str(text).unwrap();
+        assert_eq!(node.system_volume, Some(0.25));
+        assert!(serde_json::to_string(&node).unwrap().contains(r#""systemVolume":0.25"#));
+        let old: GraphNode = serde_json::from_str(r#"{"id":"o","kind":"output","label":"o","position":{"x":0,"y":0}}"#).unwrap();
+        assert_eq!(old.system_volume, None);
     }
 
     #[test]

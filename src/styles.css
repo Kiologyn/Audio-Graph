@@ -164,8 +164,7 @@ button {
   transition: transform 150ms ease;
 }
 
-.ag-graphs__options.is-open svg,
-.ag-node__options.is-open svg {
+.ag-graphs__options.is-open svg {
   transform: rotate(180deg);
 }
 
@@ -1237,7 +1236,7 @@ button {
   background: var(--ag-hover);
 }
 
-/* a node's options menu: a name above each slider, in the node kind's color */
+/* the button on the canvas that adds a node */
 .ag-add-node {
   display: inline-flex;
   align-items: center;
@@ -1260,48 +1259,28 @@ button {
 /* a node's options menu: a checkbox per slider, in the node kind's color */
 .ag-node-options {
   display: grid;
-  gap: 12px;
-  width: 260px;
-  padding: 10px 12px;
+  gap: 2px;
+  min-width: 120px;
+  padding: 6px 8px;
 }
 
-.ag-node-options__head {
+.ag-node-options__check {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 0;
   font-size: 12px;
-  color: var(--ag-text-dim);
-}
-
-.ag-node-options__pin {
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  margin-right: -4px;
-  padding: 0;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--ag-text-dim);
+  color: var(--ag-text);
   cursor: pointer;
 }
 
-.ag-node-options__pin:hover {
-  color: var(--ag-text);
-  background: var(--ag-hover);
+.ag-node-options__check input {
+  margin: 0;
+  accent-color: var(--ag-focus);
+  cursor: pointer;
 }
 
-.ag-node-options__pin.is-on {
-  color: var(--accent);
-}
-
-.ag-node-options__row .ag-volume,
-.ag-node-options__row .ag-delay {
-  margin-top: 4px;
-}
-
-/* a slider pinned to the node: its name above it */
+/* a slider shown on the node: its name above it */
 .ag-node__slider {
   margin-top: 8px;
 }
@@ -1442,6 +1421,10 @@ button {
   background: var(--ag-surface);
 }
 
+.ag-volume.is-off {
+  opacity: 0.5;
+}
+
 .ag-volume__value {
   min-width: 36px;
   font-size: 11px;
@@ -1470,6 +1453,10 @@ button {
 }
 
 /* gain above 100% is done by the engine only, and it shows */
+.ag-volume__value.is-unset {
+  opacity: 0.6;
+}
+
 .ag-volume__value.is-boost {
   color: var(--accent);
 }
@@ -1520,6 +1507,57 @@ button {
     var(--accent) var(--to),
     var(--ag-surface-2) var(--to)
   );
+}
+
+/* a noise gate: the rail is a volume slider's, faintly tinted where sound passes; the knob's center is the threshold */
+.ag-gate .ag-volume__track::before {
+  --edge: calc(6px + (100% - 12px) * var(--at));
+  background: linear-gradient(
+    to right,
+    var(--ag-surface-2) var(--edge),
+    color-mix(in srgb, var(--accent) 28%, var(--ag-surface-2)) var(--edge)
+  );
+}
+
+/* the sound in the rail. A window slides over it and the sound slides back inside the window:
+   it stays in place while only two layers move */
+.ag-gate__meter {
+  position: absolute;
+  top: 5px;
+  right: 0;
+  left: 0;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+.ag-gate__window,
+.ag-gate__sound {
+  width: 100%;
+  height: 100%;
+  will-change: transform;
+  transition: transform 40ms linear;
+}
+
+.ag-gate__window {
+  overflow: hidden;
+  transform: translateX(-100%);
+}
+
+.ag-gate__sound {
+  --edge: calc(6px + (100% - 12px) * var(--at));
+  transform: translateX(100%);
+  background: linear-gradient(to right, var(--ag-edge) var(--edge), var(--accent) var(--edge));
+}
+
+/* the knob fills up while sound passes */
+.ag-gate[data-open] input[type="range"]::-webkit-slider-thumb {
+  background: var(--accent);
+}
+
+.ag-gate .ag-volume__value {
+  min-width: 46px;
 }
 
 /* under the knob's center: the 12 px knob moves within the track minus its width */
