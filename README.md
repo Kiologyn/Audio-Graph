@@ -6,6 +6,17 @@ Route audio by drawing it. Connect microphones, headphones, apps and virtual cab
 
 *Spotify plays in the headphones and, mixed with the microphone, goes into Discord through a virtual cable.*
 
+<table>
+  <tr>
+    <td width="50%"><img src="docs/cable.png" alt="A Cable node with volume, balance, delay and a noise gate with a level meter"></td>
+    <td width="50%"><img src="docs/problems.png" alt="An app connected to two outputs: the arrows turn red and the node explains what to do"></td>
+  </tr>
+  <tr>
+    <td>Every node processes the sound that reaches it: here a cable's volume, balance, delay and noise gate.</td>
+    <td>Problems show up in place, with what to do about them.</td>
+  </tr>
+</table>
+
 > [!IMPORTANT]
 > **Windows needs a virtual cable driver.** Without one, no sound can go through a cable to or from an app, and that is what most graphs do. [What to install](#virtual-cables-on-windows)
 
@@ -46,6 +57,8 @@ Audio Graph can't create these devices by itself, as it does on Linux: Microsoft
 1. Install [VB-CABLE](https://vb-audio.com/Cable/) or [Virtual Audio Cable](https://vac.muzychenko.net/).
 2. Press *Find cables* in the **Cables** menu of Audio Graph. It adds every cable it finds.
 3. Choose that cable in a Cable node, in any graph.
+
+<img src="docs/cables.png" alt="The Cables menu with two cables and the Find cables button" width="420">
 
 On Linux there is nothing to install: the graph creates its cables itself while it runs.
 
