@@ -35,6 +35,11 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "windows": {
+      "wix": {
+        "template": "wix/main.wxs"
+      }
+    },
     "linux": {
       "deb": {
         "depends": ["libpulse0"]

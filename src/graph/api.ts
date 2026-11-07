@@ -6,12 +6,11 @@ import type { DocEdge, DocNode, GraphDoc, GraphMeta, GraphPrefs } from "./doc";
 export const graphsApi = {
   init: () => invoke<{ graphs: GraphMeta[]; lastOpened: string | null }>("graphs_init"),
   load: (id: string) => invoke<GraphDoc>("graph_load", { id }),
-  create: (name: string, nodes: DocNode[], edges: DocEdge[], showVolume: boolean, showDelay: boolean) =>
-    invoke<GraphDoc>("graph_create", { name, nodes, edges, showVolume, showDelay }),
+  create: (name: string, nodes: DocNode[], edges: DocEdge[]) => invoke<GraphDoc>("graph_create", { name, nodes, edges }),
   save: (graph: GraphDoc) => invoke<GraphMeta>("graph_save", { graph }),
   rename: (id: string, name: string) => invoke<GraphMeta>("graph_rename", { id, name }),
-  setPrefs: (id: string, { showVolume, showBalance, showDelay, delayLimit, startOnLaunch }: GraphPrefs) =>
-    invoke<GraphMeta>("graph_set_prefs", { id, prefs: { showVolume, showBalance, showDelay, delayLimit, startOnLaunch } }),
+  setPrefs: (id: string, { delayLimit, volumeLimit, startOnLaunch }: GraphPrefs) =>
+    invoke<GraphMeta>("graph_set_prefs", { id, prefs: { delayLimit, volumeLimit, startOnLaunch } }),
   remove: (id: string) => invoke<void>("graph_delete", { id }),
   reorder: (ids: string[]) => invoke<void>("graphs_reorder", { ids }),
   exportTo: (id: string, path: string) => invoke<void>("graph_export", { id, path }),

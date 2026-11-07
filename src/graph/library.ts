@@ -1,7 +1,7 @@
+import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { create } from "zustand";
 import { t } from "../i18n";
-import { useSettings } from "../settings";
 import { graphsApi } from "./api";
 import { useCables } from "./cables";
 import { edgesToDoc, nodesToDoc, type GraphDoc, type GraphMeta, type GraphPrefs } from "./doc";
@@ -90,12 +90,18 @@ async function saveNow() {
   }
 }
 
-/** Write unsaved changes now (before switching graphs, when the window closes) */
+/** Write unsaved changes now (before switching graphs, before quitting) */
 export function flushSave(): Promise<void> {
   clearTimeout(timer);
   timer = undefined;
   queue = queue.then(saveNow);
   return queue;
+}
+
+/** Quits the app; what is waiting for the autosave goes to disk first */
+export async function quitApp() {
+  await flushSave();
+  await invoke("app_quit");
 }
 
 useGraph.subscribe((state, prev) => {
@@ -138,12 +144,9 @@ let initOnce: Promise<void> | null = null;
 import.meta.hot?.accept(() => location.reload());
 
 export const useLibrary = create<LibraryState>()((set, get) => {
-  /** showDelay: delay sliders on (the ready-made graphs of a first start); other graphs start without them */
-  async function createFrom(name: string, nodes: AudioNode[], edges: AudioEdge[], showDelay = false): Promise<string> {
+  async function createFrom(name: string, nodes: AudioNode[], edges: AudioEdge[]): Promise<string> {
     await flushSave();
-    // a new graph's volume checkbox is as set in the settings
-    const showVolume = useSettings.getState().newGraphVolume;
-    const doc = await graphsApi.create(name, nodesToDoc(nodes), edgesToDoc(edges), showVolume, showDelay);
+    const doc = await graphsApi.create(name, nodesToDoc(nodes), edgesToDoc(edges));
     set((s) => ({ graphs: [...s.graphs, metaOf(doc)] }));
     useGraph.getState().loadDoc(doc);
     markLoaded();
@@ -181,8 +184,7 @@ export const useLibrary = create<LibraryState>()((set, get) => {
           } else {
             // first start: ready-made graphs, the first one open
             const ids = [];
-            // a new user sees the delay sliders right away, with the default range of ±0.5 s
-            for (const g of starterGraphs()) ids.push(await createFrom(g.name, g.nodes, g.edges, true));
+            for (const g of starterGraphs()) ids.push(await createFrom(g.name, g.nodes, g.edges));
             await get().open(ids[0]);
           }
         } else {

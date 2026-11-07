@@ -6,18 +6,20 @@ import {
   type Connection,
   type EdgeChange,
   type NodeChange,
-  type Viewport,
   type XYPosition,
 } from "@xyflow/react";
 import { create } from "zustand";
 import { isAnyTranslation, t } from "../i18n";
+import type { Camera } from "./camera";
 import { edgesFromDoc, nodesFromDoc, type GraphDoc, type GraphPrefs } from "./doc";
 import {
-  NODE_KINDS,
+  NODE_KINDS, NO_GATE,
   type AudioEdge,
   type AudioNode,
+  type AudioNodeData,
   type AudioNodeKind,
   type AppRef,
+  type NodeSlider,
   type DeviceRef,
   type DeviceSlotName,
 } from "./types";
@@ -26,14 +28,14 @@ import {
 type GraphState = {
   /** null until the graph is loaded */
   meta: ({ id: string; name: string; createdAt: number } & GraphPrefs) | null;
-  viewport: Viewport | null;
+  viewport: Camera | null;
   nodes: AudioNode[];
   edges: AudioEdge[];
   loadDoc: (doc: GraphDoc) => void;
   unload: () => void;
   setName: (name: string) => void;
   setPrefs: (patch: Partial<GraphPrefs>) => void;
-  setViewport: (viewport: Viewport) => void;
+  setViewport: (viewport: Camera) => void;
   onNodesChange: (changes: NodeChange<AudioNode>[]) => void;
   onEdgesChange: (changes: EdgeChange<AudioEdge>[]) => void;
   onConnect: (connection: Connection) => void;
@@ -45,10 +47,16 @@ type GraphState = {
   setCable: (id: string, cable: string | null) => void;
   setApp: (id: string, app: AppRef | null) => void;
   setVolume: (id: string, volume: number) => void;
+  setSystemVolume: (id: string, volume: number | null) => void;
+  /** The system's slider moved by itself while the graph runs: the graph follows it, it isn't an edit to undo */
+  followSystemVolume: (id: string, volume: number) => void;
   setDelay: (id: string, delay: number) => void;
+  /** Pins a slider to its node or takes it off */
+  togglePinned: (id: string, slider: NodeSlider) => void;
   /** Delays of several outputs as one undo step (calibration) */
   setDelays: (delays: Record<string, number>) => void;
   setBalance: (id: string, balance: number) => void;
+  setGate: (id: string, gate: number) => void;
   undo: () => void;
   redo: () => void;
 };
@@ -80,7 +88,7 @@ function makeNode(kind: AudioNodeKind, position: XYPosition, label?: string): Au
     id: crypto.randomUUID(),
     type: "audio",
     position,
-    data: { kind, label: label ?? t(NODE_KINDS[kind].defaultLabel), sink: null, source: null, cable: null, app: null, volume: 1, delay: 0, balance: 0 },
+    data: { kind, label: label ?? t(NODE_KINDS[kind].defaultLabel), sink: null, source: null, cable: null, app: null, volume: 1, systemVolume: null, delay: 0, balance: 0, gate: NO_GATE, pinned: [] },
   };
 }
 
@@ -172,11 +180,9 @@ export const useGraph = create<GraphState>()((set, get) => {
           id: doc.id,
           name: doc.name,
           createdAt: doc.createdAt,
-          showVolume: doc.showVolume ?? true,
-          showDelay: doc.showDelay ?? false,
           delayLimit: doc.delayLimit ?? 0.5,
+          volumeLimit: doc.volumeLimit ?? 2,
           startOnLaunch: doc.startOnLaunch ?? false,
-          showBalance: doc.showBalance ?? false,
         },
         viewport: doc.viewport,
         nodes: nodesFromDoc(doc.nodes),
@@ -282,6 +288,19 @@ export const useGraph = create<GraphState>()((set, get) => {
       });
     },
 
+    setSystemVolume: (id, systemVolume) => {
+      record(`volume:${id}`);
+      set({
+        nodes: get().nodes.map((n) => (n.id === id ? { ...n, data: { ...n.data, systemVolume } } : n)),
+      });
+    },
+
+    followSystemVolume: (id, systemVolume) => {
+      set({
+        nodes: get().nodes.map((n) => (n.id === id ? { ...n, data: { ...n.data, systemVolume } } : n)),
+      });
+    },
+
     setDelay: (id, delay) => {
       record(`delay:${id}`);
       set({
@@ -289,10 +308,26 @@ export const useGraph = create<GraphState>()((set, get) => {
       });
     },
 
+    togglePinned: (id, slider) => {
+      record();
+      const toggled = ({ pinned }: AudioNodeData) =>
+        pinned.includes(slider) ? pinned.filter((s) => s !== slider) : [...pinned, slider];
+      set({
+        nodes: get().nodes.map((n) => (n.id === id ? { ...n, data: { ...n.data, pinned: toggled(n.data) } } : n)),
+      });
+    },
+
     setDelays: (delays) => {
       record();
       set({
         nodes: get().nodes.map((n) => (n.id in delays ? { ...n, data: { ...n.data, delay: delays[n.id] } } : n)),
+      });
+    },
+
+    setGate: (id, gate) => {
+      record(`gate:${id}`);
+      set({
+        nodes: get().nodes.map((n) => (n.id === id ? { ...n, data: { ...n.data, gate } } : n)),
       });
     },
 

@@ -2,21 +2,24 @@
 
 pub(crate) mod probe;
 mod router;
-mod streams;
+pub(super) mod streams;
 
+use super::levels::Levels;
 use super::plan::{Defaults, Plan};
+use super::streams::Streams;
 use super::{AppStatus, StreamStatus};
 use std::path::Path;
+use std::sync::Arc;
 
 pub struct Backend {
-    streams: streams::Streams,
+    streams: Streams,
     router: router::Router,
 }
 
 impl Backend {
-    pub fn new(data_dir: &Path) -> Self {
+    pub fn new(data_dir: &Path, levels: Arc<Levels>) -> Self {
         Self {
-            streams: streams::Streams::default(),
+            streams: Streams::new(levels),
             router: router::Router::new(data_dir),
         }
     }

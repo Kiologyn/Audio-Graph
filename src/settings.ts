@@ -15,8 +15,6 @@ export type Settings = {
   disableIdleCables: boolean;
   /** Hide the graph minimap in the bottom right corner of the canvas */
   hideMinimap: boolean;
-  /** The volume checkbox of a new graph: whether its nodes show volume sliders */
-  newGraphVolume: boolean;
   /** Start with the system (only an installed app can) */
   autostart: boolean;
   /** An icon in the tray: the closed window hides there; without it closing the window quits */
@@ -35,7 +33,6 @@ const DEFAULTS: Settings = {
   language: (["ru", "es", "zh", "ja"] as const).find((l) => navigator.language.startsWith(l)) ?? "en",
   disableIdleCables: false,
   hideMinimap: false,
-  newGraphVolume: true,
   autostart: false,
   tray: false,
 };

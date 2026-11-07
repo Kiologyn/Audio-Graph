@@ -49,6 +49,23 @@ impl Consumer {
         r.written.load(Ordering::Acquire).wrapping_sub(r.read.load(Ordering::Relaxed))
     }
 
+    pub fn capacity(&self) -> usize {
+        self.0.data.len()
+    }
+
+    /// Hands everything in the buffer to another ring, as much as fits there. The writer of
+    /// this ring must wait meanwhile, or what it writes may be lost
+    pub fn move_to(&self, to: &Producer) {
+        let r = &*self.0;
+        let (start, n) = (r.read.load(Ordering::Relaxed) % r.data.len(), self.len());
+        let first = n.min(r.data.len() - start);
+        // an UnsafeCell<f32> is laid out as an f32, and the counters keep the writer out of this region
+        let values = |at: usize, n: usize| unsafe { std::slice::from_raw_parts(r.data.as_ptr().add(at) as *const f32, n) };
+        to.push(values(start, first));
+        to.push(values(0, n - first));
+        self.skip(n);
+    }
+
     /// Adds what it reads to out (mixing); returns how much was read
     pub fn mix_into(&self, out: &mut [f32]) -> usize {
         let r = &*self.0;
@@ -56,25 +73,6 @@ impl Consumer {
         let n = out.len().min(self.len());
         for (i, o) in out[..n].iter_mut().enumerate() {
             *o += unsafe { *r.data[(read + i) % r.data.len()].get() };
-        }
-        r.read.store(read.wrapping_add(n), Ordering::Release);
-        n
-    }
-
-    /// Like mix_into for frames of C channels, with each channel's volume going smoothly
-    /// from from to to: a volume jump would click
-    pub fn mix_into_scaled<const C: usize>(&self, out: &mut [f32], from: [f32; C], to: [f32; C]) -> usize {
-        if from == [1.0; C] && to == [1.0; C] {
-            return self.mix_into(out);
-        }
-        let r = &*self.0;
-        let read = r.read.load(Ordering::Relaxed);
-        let n = out.len().min(self.len());
-        let frames = n / C;
-        let step: [f32; C] = std::array::from_fn(|ch| if frames > 1 { (to[ch] - from[ch]) / (frames - 1) as f32 } else { 0.0 });
-        for (i, o) in out[..n].iter_mut().enumerate() {
-            let (frame, ch) = (i / C, i % C);
-            *o += unsafe { *r.data[(read + i) % r.data.len()].get() } * (from[ch] + step[ch] * frame as f32);
         }
         r.read.store(read.wrapping_add(n), Ordering::Release);
         n
@@ -115,28 +113,6 @@ mod tests {
     }
 
     #[test]
-    fn scaled_mix_ramps_each_channel_on_its_own() {
-        let (p, c) = ring(16);
-        p.push(&[1.0; 8]);
-        let mut out = [0.5; 8];
-        assert_eq!(c.mix_into_scaled(&mut out, [0.0, 1.0], [1.0, 0.0]), 8);
-        // over the 4 frames the left rises 0 → 1 and the right falls 1 → 0, added to what was there
-        let third = 1.0 / 3.0;
-        let expected = [0.5, 1.5, 0.5 + third, 1.5 - third, 1.5 - third, 0.5 + third, 1.5, 0.5];
-        assert!(out.iter().zip(expected).all(|(o, e)| (o - e).abs() < 1e-6), "{out:?}");
-        // an unchanged gain of one is a plain mix
-        p.push(&[2.0; 4]);
-        let mut out = [0.0; 4];
-        assert_eq!(c.mix_into_scaled(&mut out, [1.0; 2], [1.0; 2]), 4);
-        assert_eq!(out, [2.0; 4]);
-        // with less in the buffer than asked, the ramp ends with what there is
-        p.push(&[1.0; 2]);
-        let mut out = [0.0; 6];
-        assert_eq!(c.mix_into_scaled(&mut out, [0.0; 2], [0.5; 2]), 2);
-        assert_eq!(c.len(), 0);
-    }
-
-    #[test]
     fn peek_and_skip_dont_lose_the_place() {
         let (p, c) = ring(4);
         p.push(&[1.0, 2.0, 3.0]);
@@ -147,6 +123,19 @@ mod tests {
         let mut out = [0.0; 3];
         assert_eq!(c.mix_into(&mut out), 3);
         assert_eq!(out, [3.0, 4.0, 5.0]);
+    }
+
+    #[test]
+    fn moves_to_another_ring_in_order() {
+        let (p, c) = ring(4);
+        p.push(&[1.0, 2.0, 3.0]);
+        c.skip(2);
+        // 3 4 5, two of them past the buffer's end
+        p.push(&[4.0, 5.0]);
+        let (bigger, moved) = ring(8);
+        c.move_to(&bigger);
+        assert_eq!((c.len(), moved.len()), (0, 3));
+        assert_eq!([moved.peek(0), moved.peek(1), moved.peek(2)], [3.0, 4.0, 5.0]);
     }
 
     #[test]

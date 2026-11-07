@@ -19,17 +19,18 @@ const doc = (patch: Partial<GraphDoc> = {}): GraphDoc => ({
       cable: null,
       app: null,
       volume: 1,
+      systemVolume: null,
       delay: 0,
       balance: 0,
+      gate: -100,
+      pinned: [],
       position: { x: 0, y: 0 },
     },
   ],
   edges: [],
-  showVolume: true,
-  showDelay: false,
   delayLimit: 0.5,
+  volumeLimit: 2,
   startOnLaunch: false,
-  showBalance: false,
   ...patch,
 });
 
@@ -116,6 +117,17 @@ describe("graph editing", () => {
     expect(node(app).data.label).toBe("Music");
   });
 
+  it("pins a slider to its node as an undo step, nothing is pinned by default", () => {
+    expect(node("o").data.pinned).toEqual([]);
+    graph().togglePinned("o", "delay");
+    graph().togglePinned("o", "volume");
+    expect(node("o").data.pinned).toEqual(["delay", "volume"]);
+    graph().togglePinned("o", "delay");
+    expect(node("o").data.pinned).toEqual(["volume"]);
+    graph().undo();
+    expect(node("o").data.pinned).toEqual(["delay", "volume"]);
+  });
+
   it("sets several delays as one step", () => {
     graph().addNode("output", { x: 0, y: 100 });
     const other = graph().nodes[1].id;
@@ -127,7 +139,7 @@ describe("graph editing", () => {
   });
 
   it("reads the options of old files as they were", () => {
-    graph().loadDoc({ ...doc(), showVolume: undefined, delayLimit: undefined } as unknown as GraphDoc);
-    expect(graph().meta).toMatchObject({ showVolume: true, delayLimit: 0.5, showDelay: false, showBalance: false });
+    graph().loadDoc({ ...doc(), delayLimit: undefined, volumeLimit: undefined, startOnLaunch: undefined } as unknown as GraphDoc);
+    expect(graph().meta).toMatchObject({ delayLimit: 0.5, volumeLimit: 2, startOnLaunch: false });
   });
 });

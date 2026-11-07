@@ -44,8 +44,6 @@ pub struct Settings {
     pub disable_idle_cables: bool,
     /// Hide the graph minimap in the bottom right corner of the canvas
     pub hide_minimap: bool,
-    /// The volume checkbox of a new graph: whether its nodes show volume sliders
-    pub new_graph_volume: bool,
     /// Start with the system. The entry in the system is the truth: it is read on every request
     pub autostart: bool,
     /// An icon in the tray: closing the window hides it there and graphs keep running;
@@ -60,7 +58,6 @@ impl Default for Settings {
             language: system_language(),
             disable_idle_cables: false,
             hide_minimap: false,
-            new_graph_volume: true,
             autostart: false,
             tray: false,
         }
@@ -182,7 +179,7 @@ mod tests {
         assert_eq!(s.language, Settings::default().language);
         assert!(s.disable_idle_cables);
         // missing ones are the defaults: settings of older versions have no tray
-        assert!(s.new_graph_volume && !s.hide_minimap && !s.tray);
+        assert!(!s.hide_minimap && !s.tray);
     }
 
     #[test]

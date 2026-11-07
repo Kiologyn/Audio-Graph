@@ -7,12 +7,15 @@
 
 use libpulse_binding as pa;
 use pa::callbacks::ListResult;
-use pa::channelmap::{Map, Position};
 use pa::context::introspect::{SinkInputInfo, SourceOutputInfo};
 use pa::context::{Context, FlagSet, State};
+use pa::def::BufferAttr;
+use pa::error::{Code, PAErr};
 use pa::mainloop::standard::Mainloop;
 use pa::operation::{Operation, State as OperationState};
 use pa::proplist::Proplist;
+use pa::sample::{Format, Spec};
+use pa::stream::{FlagSet as StreamFlags, PeekResult, SeekMode, State as StreamState, Stream as PaStream};
 use pa::time::MicroSeconds;
 use pa::volume::{ChannelVolumes, Volume, VolumeLinear};
 use std::cell::RefCell;
@@ -35,6 +38,7 @@ pub struct Device {
     pub index: u32,
     pub name: String,
     pub description: String,
+    pub volume: ChannelVolumes,
     /// For a source: it is the monitor of an output device (what plays into it), not an input device
     pub monitor_of: Option<u32>,
 }
@@ -45,14 +49,11 @@ pub struct Stream {
     pub index: u32,
     /// The device the stream is connected to: a sink or source index
     pub device: u32,
-    /// Set for app streams; module streams (loopbacks) have none
+    /// Set for app streams; module streams have none
     pub client: Option<u32>,
-    pub owner_module: Option<u32>,
     pub corked: bool,
     pub volume: ChannelVolumes,
     pub volume_writable: bool,
-    /// Which channel is where: balance needs to know left from right
-    pub channel_map: Map,
     /// The app's executable file name (application.process.binary)
     pub binary: Option<String>,
     pub pid: Option<u32>,
@@ -95,11 +96,9 @@ fn sink_input(i: &SinkInputInfo) -> Stream {
         index: i.index,
         device: i.sink,
         client: i.client,
-        owner_module: i.owner_module,
         corked: i.corked,
         volume: i.volume,
         volume_writable: i.volume_writable,
-        channel_map: i.channel_map,
         binary,
         pid,
         app_name,
@@ -112,31 +111,13 @@ fn source_output(i: &SourceOutputInfo) -> Stream {
         index: i.index,
         device: i.source,
         client: i.client,
-        owner_module: i.owner_module,
         corked: i.corked,
         volume: i.volume,
         volume_writable: i.volume_writable,
-        channel_map: i.channel_map,
         binary,
         pid,
         app_name,
     }
-}
-
-/// Volume per channel as amplitude factors: left channels get the left one, right channels
-/// the right one, the others (mono, center, LFE) the louder of the two
-pub fn linear_balanced(map: &Map, [left, right]: [f32; 2]) -> ChannelVolumes {
-    use Position::*;
-    let mut v = linear(map.len(), left.max(right));
-    for (volume, position) in v.get_mut().iter_mut().zip(map.get()) {
-        let gain = match position {
-            FrontLeft | RearLeft | SideLeft | FrontLeftOfCenter | TopFrontLeft | TopRearLeft => left,
-            FrontRight | RearRight | SideRight | FrontRightOfCenter | TopFrontRight | TopRearRight => right,
-            _ => continue,
-        };
-        *volume = Volume::from(VolumeLinear(f64::from(gain.max(0.0))));
-    }
-    v
 }
 
 /// Volume as an amplitude factor: 0.5 is half as loud, 2 twice as loud
@@ -153,9 +134,16 @@ pub fn mixer(channels: u8, level: f32) -> ChannelVolumes {
     v
 }
 
-/// A stream's volume slider position: 1.0 is 100%
-pub fn mixer_level(v: &ChannelVolumes) -> f32 {
-    v.avg().0 as f32 / Volume::NORMAL.0 as f32
+/// The same volume at another slider position: the channels keep their balance
+pub fn rescaled(volume: &ChannelVolumes, level: f32) -> ChannelVolumes {
+    let mut v = *volume;
+    v.scale(Volume((level.max(0.0) * Volume::NORMAL.0 as f32).round() as u32));
+    v
+}
+
+/// Where a slider stands when the channels differ: the loudest one, rescaled moves it
+pub fn slider_level(v: &ChannelVolumes) -> f32 {
+    v.max().0 as f32 / Volume::NORMAL.0 as f32
 }
 
 fn describe(e: pa::error::PAErr) -> String {
@@ -285,6 +273,7 @@ impl Pulse {
                 index: i.index,
                 name: i.name.as_deref().unwrap_or_default().to_string(),
                 description: i.description.as_deref().unwrap_or_default().to_string(),
+                volume: i.volume,
                 monitor_of: None,
             }),
             ListResult::Error => dst.borrow_mut().failed = true,
@@ -301,6 +290,7 @@ impl Pulse {
                 index: i.index,
                 name: i.name.as_deref().unwrap_or_default().to_string(),
                 description: i.description.as_deref().unwrap_or_default().to_string(),
+                volume: i.volume,
                 monitor_of: i.monitor_of_sink,
             }),
             ListResult::Error => dst.borrow_mut().failed = true,
@@ -387,6 +377,14 @@ impl Pulse {
         self.confirm(|p, done| p.context.introspect().move_source_output_by_name(index, source, Some(done)))
     }
 
+    pub fn set_sink_volume(&mut self, name: &str, volume: &ChannelVolumes) -> Result<(), String> {
+        self.confirm(|p, done| p.context.introspect().set_sink_volume_by_name(name, volume, Some(done)))
+    }
+
+    pub fn set_source_volume(&mut self, name: &str, volume: &ChannelVolumes) -> Result<(), String> {
+        self.confirm(|p, done| p.context.introspect().set_source_volume_by_name(name, volume, Some(done)))
+    }
+
     pub fn set_sink_input_volume(&mut self, index: u32, volume: &ChannelVolumes) -> Result<(), String> {
         self.confirm(|p, done| p.context.introspect().set_sink_input_volume(index, volume, Some(done)))
     }
@@ -398,6 +396,141 @@ impl Pulse {
     pub fn set_default_source(&mut self, name: &str) -> Result<(), String> {
         self.confirm(|p, done| p.context.set_default_source(name, done))
     }
+}
+
+/// Properties of the engine's streams: WirePlumber must not apply a saved volume or device
+/// to them (otherwise one stream's volume carries over to others)
+const STREAM_PROPS: [(&str, &str); 3] = [("audiograph.link", "1"), ("state.restore-props", "false"), ("state.restore-target", "false")];
+/// Streams stay on their device: when it goes, the stream ends instead of sounding somewhere else
+const STREAM_FLAGS: StreamFlags = StreamFlags::DONT_MOVE.union(StreamFlags::ADJUST_LATENCY);
+/// A sample of the float format the streams use
+const SAMPLE: usize = size_of::<f32>();
+/// "Leave it to the server" in buffer sizes
+const SERVER_DECIDES: u32 = u32::MAX;
+
+/// A recording or playback stream on its own server connection, in float samples.
+/// There are no callbacks: whoever owns it waits for events and asks what can be read or written
+pub struct AudioStream {
+    // before the connection: the stream goes first
+    stream: PaStream,
+    pulse: Pulse,
+    channels: u8,
+    /// What came from the server and doesn't make whole frames yet
+    bytes: Vec<u8>,
+    samples: Vec<f32>,
+}
+
+impl AudioStream {
+    fn open(device: &str, rate: u32, channels: u8, connect: impl FnOnce(&mut PaStream) -> Result<(), PAErr>) -> Result<Self, String> {
+        let mut pulse = Pulse::connect("Audio Graph")?;
+        let spec = Spec { format: Format::FLOAT32NE, channels, rate };
+        let mut props = Proplist::new().ok_or("libpulse: proplist")?;
+        for (key, value) in STREAM_PROPS {
+            let _ = props.set_str(key, value);
+        }
+        let mut stream = PaStream::new_with_proplist(&mut pulse.context, "link", &spec, None, &mut props).ok_or_else(|| pulse.error())?;
+        connect(&mut stream).map_err(describe)?;
+        let deadline = Instant::now() + TIMEOUT;
+        loop {
+            match stream.get_state() {
+                StreamState::Ready => break,
+                StreamState::Failed | StreamState::Terminated => {
+                    let error = pulse.context.errno();
+                    return Err(if error.0.abs() == Code::NoEntity as i32 {
+                        tr!("error_device_not_found")
+                    } else {
+                        format!("{device}: {}", describe(error))
+                    });
+                }
+                _ => {}
+            }
+            pulse.turn(deadline)?;
+        }
+        Ok(Self { stream, pulse, channels, bytes: Vec::new(), samples: Vec::new() })
+    }
+
+    /// Records from a source in packets of about this length
+    pub fn record(device: &str, rate: u32, channels: u8, packet: Duration) -> Result<Self, String> {
+        let attr = BufferAttr {
+            maxlength: SERVER_DECIDES,
+            tlength: SERVER_DECIDES,
+            prebuf: SERVER_DECIDES,
+            minreq: SERVER_DECIDES,
+            fragsize: bytes(packet, rate, channels),
+        };
+        Self::open(device, rate, channels, |s| s.connect_record(Some(device), Some(&attr), STREAM_FLAGS))
+    }
+
+    /// Plays into a sink with this much sound ahead, asking for more in packets of about this length.
+    /// The stream's own volume stays at 100%: the volume is in what is written
+    pub fn play(device: &str, rate: u32, channels: u8, ahead: Duration, packet: Duration) -> Result<Self, String> {
+        let attr = BufferAttr {
+            maxlength: SERVER_DECIDES,
+            tlength: bytes(ahead, rate, channels),
+            // no waiting for a full buffer, at the start or after running dry: a link always has
+            // something to write, and under load this clicks less than waiting (measured)
+            prebuf: 0,
+            minreq: bytes(packet, rate, channels),
+            fragsize: SERVER_DECIDES,
+        };
+        let volume = linear(channels, 1.0);
+        let flags = STREAM_FLAGS | StreamFlags::START_UNMUTED;
+        Self::open(device, rate, channels, |s| s.connect_playback(Some(device), Some(&attr), flags, Some(&volume), None))
+    }
+
+    /// Sleeps until the server has something, at most for this long. A stream that ended is an error:
+    /// its device is gone or the server went away
+    pub fn wait(&mut self, at_most: Duration) -> Result<(), String> {
+        self.pulse.turn(Instant::now() + at_most)?;
+        match self.stream.get_state() {
+            StreamState::Ready => Ok(()),
+            _ => Err(tr!("error_device_disconnected")),
+        }
+    }
+
+    fn frame(&self) -> usize {
+        SAMPLE * self.channels as usize
+    }
+
+    /// Hands over all that was recorded by now, in whole frames
+    pub fn read(&mut self, mut each: impl FnMut(&[f32])) -> Result<(), String> {
+        loop {
+            match self.stream.peek().map_err(describe)? {
+                PeekResult::Empty => return Ok(()),
+                PeekResult::Data(data) => self.bytes.extend_from_slice(data),
+                // the server has no sound for that part
+                PeekResult::Hole(size) => self.bytes.resize(self.bytes.len() + size, 0),
+            }
+            self.stream.discard().map_err(describe)?;
+            let whole = self.bytes.len() / self.frame() * self.frame();
+            self.samples.clear();
+            self.samples.extend(self.bytes[..whole].chunks_exact(SAMPLE).map(|b| f32::from_ne_bytes([b[0], b[1], b[2], b[3]])));
+            self.bytes.drain(..whole);
+            each(&self.samples);
+        }
+    }
+
+    /// How many frames the server wants now
+    pub fn writable(&self) -> Result<usize, String> {
+        let bytes = self.stream.writable_size().ok_or_else(|| self.pulse.error())?;
+        Ok(bytes / self.frame())
+    }
+
+    pub fn write(&mut self, samples: &[f32]) -> Result<(), String> {
+        let bytes: Vec<u8> = samples.iter().flat_map(|s| s.to_ne_bytes()).collect();
+        self.stream.write_copy(&bytes, 0, SeekMode::Relative).map_err(describe)
+    }
+}
+
+impl Drop for AudioStream {
+    fn drop(&mut self) {
+        let _ = self.stream.disconnect();
+    }
+}
+
+/// A length of sound in bytes of the float format
+fn bytes(length: Duration, rate: u32, channels: u8) -> u32 {
+    (length.as_secs_f64() * rate as f64) as u32 * SAMPLE as u32 * channels as u32
 }
 
 impl Drop for Pulse {
@@ -413,19 +546,6 @@ mod tests {
     /// The volumes as amplitude factors, to a thousandth (the server keeps them on a cubic scale)
     fn factors(v: &ChannelVolumes) -> Vec<f64> {
         v.get().iter().map(|&v| (VolumeLinear::from(v).0 * 1000.0).round() / 1000.0).collect()
-    }
-
-    #[test]
-    fn balance_follows_channel_positions() {
-        let map = |s: &str| Map::new_from_string(s).unwrap();
-        assert_eq!(factors(&linear_balanced(&map("front-left,front-right"), [1.0, 0.25])), [1.0, 0.25]);
-        // 5.1: rear channels follow their side, center and LFE the louder side
-        let surround = map("front-left,front-right,front-center,lfe,rear-left,rear-right");
-        assert_eq!(factors(&linear_balanced(&surround, [0.5, 0.2])), [0.5, 0.2, 0.5, 0.5, 0.5, 0.2]);
-        // mono can't be balanced: the louder side
-        assert_eq!(factors(&linear_balanced(&map("mono"), [0.3, 0.9])), [0.9]);
-        // a negative gain is silence, not an error
-        assert_eq!(factors(&linear_balanced(&map("front-left,front-right"), [-1.0, 1.0])), [0.0, 1.0]);
     }
 
     #[test]

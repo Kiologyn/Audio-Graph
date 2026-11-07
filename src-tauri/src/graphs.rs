@@ -22,12 +22,16 @@ fn full_volume() -> f32 {
     1.0
 }
 
-fn yes() -> bool {
-    true
+fn no_gate() -> f32 {
+    crate::engine::NO_GATE
 }
 
 fn half_second() -> f32 {
     0.5
+}
+
+fn twice_as_loud() -> f32 {
+    2.0
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,11 +51,17 @@ pub struct Position {
     pub y: f64,
 }
 
+/// A view as it was left by hand, with the size of the canvas it was left on: the window's size
+/// when the graph opens may be another. Files of earlier versions have no size
 #[derive(Serialize, Deserialize, Clone, Copy, Debug)]
 pub struct Viewport {
     pub x: f64,
     pub y: f64,
     pub zoom: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
 }
 
 /// A node port's binding to a system device
@@ -93,15 +103,25 @@ pub struct GraphNode {
     /// The app an app node stands for
     #[serde(default)]
     pub app: Option<AppRef>,
-    /// Volume: 1 is unchanged, 0 is silence, above 1 is gain (engine streams only)
+    /// A cable's volume: 1 is unchanged, 0 is silence, above 1 is gain
     #[serde(default = "full_volume")]
     pub volume: f32,
-    /// An output's delay in seconds relative to the other outputs: plus plays later, minus earlier
+    /// What the system's slider of a device or app is set to while the graph runs; none leaves it alone
+    #[serde(default, rename = "systemVolume")]
+    pub system_volume: Option<f32>,
+    /// Delay in seconds. A device's is a minus, how much earlier it sounds than the rest;
+    /// a cable's holds back the sound passing through it (from 0)
     #[serde(default)]
     pub delay: f32,
     /// Left-right balance from -1 (left only) to 1 (right only); engine streams only
     #[serde(default)]
     pub balance: f32,
+    /// A cable's noise gate in dB: quieter sound is muted, -100 lets everything through
+    #[serde(default = "no_gate")]
+    pub gate: f32,
+    /// The sliders that stay on the node, not only in its menu: "volume", "balance", "delay", "gate"
+    #[serde(default)]
+    pub pinned: Vec<String>,
     pub position: Position,
 }
 
@@ -127,31 +147,61 @@ pub struct Graph {
     pub nodes: Vec<GraphNode>,
     #[serde(default)]
     pub edges: Vec<GraphEdge>,
-    /// Volume sliders on this graph's nodes
-    #[serde(default = "yes")]
-    pub show_volume: bool,
-    /// Delay sliders on this graph's output nodes; while off, its delays aren't applied
-    #[serde(default)]
-    pub show_delay: bool,
-    /// The delay sliders' range: from minus this many seconds to plus
+    /// Files of older versions: whether delays were on. What was off stays without effect (upgraded)
+    #[serde(default, skip_serializing)]
+    pub show_delay: Option<bool>,
+    /// The delay sliders' range: from minus this many seconds to plus (cables from 0)
     #[serde(default = "half_second")]
     pub delay_limit: f32,
+    /// The volume sliders' maximum: 2 is 200%. An app's slider stops at 100% anyway
+    #[serde(default = "twice_as_loud")]
+    pub volume_limit: f32,
     /// Start the graph when the app starts with the system
     #[serde(default)]
     pub start_on_launch: bool,
-    /// Balance sliders on this graph's nodes; while off, its balances aren't applied
-    #[serde(default)]
-    pub show_balance: bool,
+    /// Files of older versions: whether balances were on. What was off stays without effect (upgraded)
+    #[serde(default, skip_serializing)]
+    pub show_balance: Option<bool>,
 }
 
 /// The widest delay slider range: delays relative to each other add up, so two of these must fit
 /// into what a link can delay (plan::MAX_DELAY)
 pub const MAX_DELAY_LIMIT: f32 = crate::engine::plan::MAX_DELAY / 2.0;
 
+/// The volume limit's range: from 1% to 1000%
+const VOLUME_LIMITS: (f32, f32) = (0.01, 10.0);
+
 impl Graph {
-    /// The delay slider range if the graph's delays are on, within what the engine can do
-    pub fn delay_limit(&self) -> Option<f32> {
-        self.show_delay.then(|| self.delay_limit.clamp(0.001, MAX_DELAY_LIMIT))
+    /// The delay slider range, within what the engine can do
+    pub fn delay_limit(&self) -> f32 {
+        self.delay_limit.clamp(0.001, MAX_DELAY_LIMIT)
+    }
+
+    /// The volume sliders' maximum, within its range
+    pub fn volume_limit(&self) -> f32 {
+        self.volume_limit.clamp(VOLUME_LIMITS.0, VOLUME_LIMITS.1)
+    }
+
+    /// A graph from a file of any version. Older versions could turn a graph's delays and balances
+    /// off and kept the values: they must not start working now that delays and balances always apply
+    fn upgraded(mut self) -> Self {
+        for node in &mut self.nodes {
+            if self.show_delay == Some(false) {
+                node.delay = 0.0;
+            }
+            if self.show_balance == Some(false) {
+                node.balance = 0.0;
+            }
+        }
+        self.show_delay = None;
+        self.show_balance = None;
+        // outputs could also play later than the others: now the others play earlier by as much
+        let outputs = || self.nodes.iter().filter(|n| n.kind == NodeKind::Output);
+        let latest = outputs().map(|n| n.delay).fold(0.0, f32::max);
+        for node in self.nodes.iter_mut().filter(|n| n.kind == NodeKind::Output) {
+            node.delay -= latest;
+        }
+        self
     }
 }
 
@@ -163,11 +213,9 @@ pub struct GraphMeta {
     pub name: String,
     pub created_at: u64,
     pub updated_at: u64,
-    pub show_volume: bool,
-    pub show_delay: bool,
     pub delay_limit: f32,
+    pub volume_limit: f32,
     pub start_on_launch: bool,
-    pub show_balance: bool,
 }
 
 impl From<&Graph> for GraphMeta {
@@ -177,11 +225,9 @@ impl From<&Graph> for GraphMeta {
             name: g.name.clone(),
             created_at: g.created_at,
             updated_at: g.updated_at,
-            show_volume: g.show_volume,
-            show_delay: g.show_delay,
             delay_limit: g.delay_limit,
+            volume_limit: g.volume_limit,
             start_on_launch: g.start_on_launch,
-            show_balance: g.show_balance,
         }
     }
 }
@@ -190,11 +236,9 @@ impl From<&Graph> for GraphMeta {
 #[derive(Deserialize, Clone, Copy, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphPrefs {
-    pub show_volume: bool,
-    pub show_delay: bool,
     pub delay_limit: f32,
+    pub volume_limit: f32,
     pub start_on_launch: bool,
-    pub show_balance: bool,
 }
 
 /// What a graph export file says about itself
@@ -258,7 +302,7 @@ impl GraphStore {
     fn read(&self, id: &str) -> CmdResult<Graph> {
         check_id(id)?;
         let text = fs::read_to_string(self.path(id)).map_err(err)?;
-        serde_json::from_str(&text).map_err(err)
+        serde_json::from_str(&text).map(Graph::upgraded).map_err(err)
     }
 
     fn write(&self, graph: &Graph) -> CmdResult<()> {
@@ -343,8 +387,6 @@ pub fn graph_create(
     name: String,
     nodes: Vec<GraphNode>,
     edges: Vec<GraphEdge>,
-    show_volume: Option<bool>,
-    show_delay: Option<bool>,
 ) -> CmdResult<Graph> {
     let _guard = store.lock.lock().map_err(err)?;
     let now = now_ms();
@@ -357,11 +399,11 @@ pub fn graph_create(
         viewport: None,
         nodes,
         edges,
-        show_volume: show_volume.unwrap_or(true),
-        show_delay: show_delay.unwrap_or(false),
+        show_delay: None,
         delay_limit: half_second(),
+        volume_limit: twice_as_loud(),
         start_on_launch: false,
-        show_balance: false,
+        show_balance: None,
     };
     store.write(&graph)?;
     store.set_last_opened(Some(&graph.id))?;
@@ -401,11 +443,9 @@ pub fn graph_rename(store: State<GraphStore>, engine: State<Engine>, id: String,
 pub fn graph_set_prefs(store: State<GraphStore>, engine: State<Engine>, id: String, prefs: GraphPrefs) -> CmdResult<GraphMeta> {
     let _guard = store.lock.lock().map_err(err)?;
     let mut graph = store.read(&id)?;
-    graph.show_volume = prefs.show_volume;
-    graph.show_delay = prefs.show_delay;
     graph.delay_limit = prefs.delay_limit.clamp(0.001, MAX_DELAY_LIMIT);
+    graph.volume_limit = prefs.volume_limit.clamp(VOLUME_LIMITS.0, VOLUME_LIMITS.1);
     graph.start_on_launch = prefs.start_on_launch;
-    graph.show_balance = prefs.show_balance;
     graph.updated_at = now_ms();
     store.write(&graph)?;
     engine.saved(&graph);
@@ -462,9 +502,9 @@ pub fn graph_import(
 /// computer's data folder (no cables then)
 fn parse_import(text: &str) -> CmdResult<(Graph, Vec<Cable>)> {
     match serde_json::from_str::<ExportFile>(text) {
-        Ok(f) if f.format == EXPORT_FORMAT => Ok((f.graph, f.cables)),
+        Ok(f) if f.format == EXPORT_FORMAT => Ok((f.graph.upgraded(), f.cables)),
         _ => serde_json::from_str::<Graph>(text)
-            .map(|g| (g, Vec::new()))
+            .map(|g| (g.upgraded(), Vec::new()))
             .map_err(|_| tr!("error_import_not_graph")),
     }
 }
@@ -587,24 +627,80 @@ mod tests {
                       "sink":{"type":"device","id":"spk","name":"Speakers"}}]}"#;
         let g: Graph = serde_json::from_str(text).unwrap();
         assert_eq!(g.version, FORMAT_VERSION);
-        assert!(g.show_volume && !g.show_delay && !g.show_balance && !g.start_on_launch);
-        assert_eq!(g.delay_limit, 0.5);
+        assert!(!g.start_on_launch);
+        assert_eq!((g.delay_limit, g.volume_limit), (0.5, 2.0));
         assert!(g.edges.is_empty() && g.viewport.is_none());
         let n = &g.nodes[0];
         assert_eq!((n.volume, n.delay, n.balance), (1.0, 0.0, 0.0));
+        assert!(n.pinned.is_empty());
         assert_eq!(n.sink, Some(DeviceRef::Device { id: "spk".into(), name: "Speakers".into() }));
     }
 
     #[test]
-    fn delay_range_is_only_there_with_the_sliders_on_and_stays_within_the_engine() {
+    fn delay_range_stays_within_the_engine() {
         let mut g = graph("g", 1, false);
-        assert_eq!(g.delay_limit(), None);
-        g.show_delay = true;
-        assert_eq!(g.delay_limit(), Some(0.5));
+        assert_eq!(g.delay_limit(), 0.5);
         g.delay_limit = 0.0;
-        assert_eq!(g.delay_limit(), Some(0.001));
-        g.delay_limit = 10.0;
-        assert_eq!(g.delay_limit(), Some(MAX_DELAY_LIMIT));
+        assert_eq!(g.delay_limit(), 0.001);
+        g.delay_limit = MAX_DELAY_LIMIT + 1.0;
+        assert_eq!(g.delay_limit(), MAX_DELAY_LIMIT);
+    }
+
+    #[test]
+    fn volume_limit_stays_in_its_range() {
+        let mut g = graph("g", 1, false);
+        assert_eq!(g.volume_limit(), 2.0);
+        g.volume_limit = 0.0;
+        assert_eq!(g.volume_limit(), 0.01);
+        g.volume_limit = 100.0;
+        assert_eq!(g.volume_limit(), 10.0);
+    }
+
+    #[test]
+    fn what_older_versions_had_turned_off_stays_without_effect() {
+        let file = |delay: bool, balance: bool| {
+            format!(
+                r#"{{"id":"g","name":"Old","createdAt":1,"updatedAt":1,"showVolume":false,"showDelay":{delay},"showBalance":{balance},
+                    "nodes":[{{"id":"o","kind":"output","label":"Speakers","position":{{"x":0,"y":0}},"delay":-0.3,"balance":-1.0}}]}}"#
+            )
+        };
+        let node = |text: String| {
+            let g = serde_json::from_str::<Graph>(&text).unwrap().upgraded();
+            (g.nodes[0].delay, g.nodes[0].balance)
+        };
+        assert_eq!(node(file(false, false)), (0.0, 0.0));
+        assert_eq!(node(file(true, false)), (-0.3, 0.0));
+        assert_eq!(node(file(false, true)), (0.0, -1.0));
+        assert_eq!(node(file(true, true)), (-0.3, -1.0));
+
+        // the flags aren't written back, and a file without them keeps its values
+        let g = serde_json::from_str::<Graph>(&file(true, true)).unwrap().upgraded();
+        let text = serde_json::to_string(&g).unwrap();
+        assert!(!text.contains("showDelay") && !text.contains("showBalance"), "{text}");
+        assert_eq!(node(text), (-0.3, -1.0));
+    }
+
+    /// Outputs could play later than the others: the same difference now is the others playing earlier
+    #[test]
+    fn a_later_output_becomes_earlier_others() {
+        let text = r#"{"id":"g","name":"Old","createdAt":1,"updatedAt":1,"nodes":[
+            {"id":"a","kind":"output","label":"a","position":{"x":0,"y":0},"delay":0.5},
+            {"id":"b","kind":"output","label":"b","position":{"x":0,"y":0},"delay":0.25},
+            {"id":"c","kind":"cable","label":"c","position":{"x":0,"y":0},"delay":0.75}]}"#;
+        let g = serde_json::from_str::<Graph>(text).unwrap().upgraded();
+        let delays: Vec<f32> = g.nodes.iter().map(|n| n.delay).collect();
+        assert_eq!(delays, vec![0.0, -0.25, 0.75]);
+    }
+
+    /// A node's setting of the system's slider survives saving, and old files have none
+    #[test]
+    fn system_volume_is_kept_in_the_file() {
+        let text = r#"{"id":"o","kind":"output","label":"o","position":{"x":0,"y":0},"systemVolume":0.25}"#;
+        let node: GraphNode = serde_json::from_str(text).unwrap();
+        assert_eq!(node.system_volume, Some(0.25));
+        assert!(serde_json::to_string(&node).unwrap().contains(r#""systemVolume":0.25"#));
+        let old: GraphNode = serde_json::from_str(r#"{"id":"o","kind":"output","label":"o","position":{"x":0,"y":0}}"#).unwrap();
+        assert_eq!(old.system_volume, None);
     }
 
     #[test]

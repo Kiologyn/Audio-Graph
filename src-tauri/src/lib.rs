@@ -15,9 +15,16 @@ mod log;
 mod pulse;
 mod settings;
 mod storage;
+mod system_volume;
 mod tray;
+mod window_state;
 
-use tauri::{Manager, RunEvent, WindowEvent};
+use std::time::Duration;
+use tauri::{AppHandle, Emitter, Manager, RunEvent, WindowEvent};
+use window_state::WindowKeeper;
+
+/// How long the window may take to write what it hasn't saved yet when the app quits
+const QUIT_WAIT: Duration = Duration::from_secs(2);
 
 /// The OS the app runs on: it decides how cables work in the interface
 #[tauri::command]
@@ -25,10 +32,24 @@ fn platform() -> &'static str {
     std::env::consts::OS
 }
 
-/// Quit the app as from the tray menu: graphs stop, devices are put back
+/// Quit the app: graphs stop, devices are put back
 #[tauri::command]
-fn app_quit(app: tauri::AppHandle) {
+fn app_quit(app: AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        app.state::<WindowKeeper>().save(&window);
+    }
     app.exit(0);
+}
+
+/// Quits once the window has written what it hasn't saved yet: it answers with app_quit, and
+/// one that doesn't answer doesn't hold the app
+pub(crate) fn request_quit(app: &AppHandle) {
+    let _ = app.emit("quit-requested", ());
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(QUIT_WAIT);
+        app_quit(app);
+    });
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -41,6 +62,7 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             log::init(&data_dir, &app.package_info().version.to_string());
+            app.manage(WindowKeeper::new(&data_dir));
             // settings first: they set the language of engine and tray messages
             let settings = settings::SettingsStore::new(&data_dir);
             let prefs = settings.get();
@@ -69,6 +91,10 @@ pub fn run() {
             app.manage(engine);
             app.manage(tray::TrayState::default());
             tray::set(app.handle(), prefs.tray);
+            let minimized = autostart::launched() && !tray::shown(app.handle());
+            if let Some(window) = app.get_webview_window("main") {
+                app.state::<WindowKeeper>().restore(&window, minimized);
+            }
             // started with the system the app waits in the tray, or minimized without one
             match (autostart::launched(), tray::shown(app.handle())) {
                 (true, true) => {}
@@ -78,13 +104,27 @@ pub fn run() {
             Ok(())
         })
         // with the tray the close button and Alt+F4 hide the window there: graphs keep running, quit from the tray menu;
-        // without it the window closes and the app quits with it
+        // without it the window goes at once and the app quits after it
         .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                if tray::shown(window.app_handle()) {
+            let app = window.app_handle();
+            match event {
+                WindowEvent::CloseRequested { api, .. } => {
                     api.prevent_close();
+                    if let Some(window) = app.get_webview_window(window.label()) {
+                        app.state::<WindowKeeper>().save(&window);
+                    }
                     let _ = window.hide();
+                    if !tray::shown(app) {
+                        request_quit(app);
+                    }
                 }
+                WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
+                    // the first events come before the app is set up
+                    if let (Some(keeper), Some(window)) = (app.try_state::<WindowKeeper>(), app.get_webview_window(window.label())) {
+                        keeper.changed(&window);
+                    }
+                }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -111,7 +151,10 @@ pub fn run() {
             engine::engine_stop,
             engine::engine_volume,
             engine::engine_balance,
+            engine::engine_gate,
+            engine::engine_levels,
             engine::engine_quiet,
+            system_volume::system_volumes,
             calibrate::calibrate_measure,
             calibrate::calibrate_preview,
             settings::settings_get,

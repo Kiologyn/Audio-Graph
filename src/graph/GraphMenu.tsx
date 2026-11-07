@@ -3,6 +3,7 @@ import { useT } from "../i18n";
 import { useSettings } from "../settings";
 import { useCalibration } from "./Calibration";
 import { MAX_DELAY_LIMIT, type GraphMeta } from "./doc";
+import { MAX_VOLUME_LIMIT } from "./types";
 import { useEngine } from "./engine";
 import { Icon } from "./icons";
 import { useLibrary } from "./library";
@@ -123,41 +124,44 @@ function RunState({ id }: { id: string }) {
   );
 }
 
-/** A number of seconds: written freely, applied on Enter or leaving the field, kept within 0.001..max */
-function SecondsField({
+/** A limit: written freely, applied on Enter or leaving the field, kept above 0 and within max, to digits after the point */
+function LimitField({
   value,
   max,
-  disabled,
+  digits,
+  prefix,
+  unit,
   title,
   onChange,
 }: {
   value: number;
   max: number;
-  disabled: boolean;
+  digits: number;
+  prefix?: string;
+  unit: string;
   title: string;
   onChange: (value: number) => void;
 }) {
   const language = useSettings((s) => s.language);
   // shown with the language's decimal separator, like the sliders' values
-  const shown = (seconds: number) => new Intl.NumberFormat(language, { maximumFractionDigits: 3, useGrouping: false }).format(seconds);
+  const shown = (limit: number) => new Intl.NumberFormat(language, { maximumFractionDigits: digits, useGrouping: false }).format(limit);
   const [draft, setDraft] = useState(() => shown(value));
-  const t = useT();
   useEffect(() => setDraft(shown(value)), [value, language]);
   const commit = () => {
     // either separator is accepted
     const n = Number(draft.trim().replace(",", "."));
-    const next = Number.isFinite(n) && n > 0 ? Math.min(max, Math.max(0.001, Math.round(n * 1000) / 1000)) : value;
+    const step = 10 ** digits;
+    const next = Number.isFinite(n) && n > 0 ? Math.min(max, Math.max(1 / step, Math.round(n * step) / step)) : value;
     setDraft(shown(next));
     if (next !== value) onChange(next);
   };
   return (
-    <label className={`ag-graph-options__seconds${disabled ? " is-disabled" : ""}`} title={title}>
-      <span>±</span>
+    <label className="ag-graph-options__seconds" title={title}>
+      {prefix && <span>{prefix}</span>}
       <input
         type="text"
         inputMode="decimal"
         value={draft}
-        disabled={disabled}
         onChange={(e) => setDraft(e.currentTarget.value)}
         onBlur={commit}
         onKeyDown={(e) => {
@@ -169,12 +173,12 @@ function SecondsField({
           }
         }}
       />
-      <span>{t("seconds_short")}</span>
+      <span>{unit}</span>
     </label>
   );
 }
 
-/** The arrow in a graph's row: a menu with its sliders, the delay range, starting with the app and export */
+/** The arrow in a graph's row: a menu with the delay range, starting with the app, calibration and export */
 function GraphOptions({ graph, onExport }: { graph: GraphMeta; onExport: (result: Transfer) => void }) {
   const setPrefs = useLibrary((s) => s.setPrefs);
   const exportGraph = useLibrary((s) => s.exportGraph);
@@ -182,7 +186,6 @@ function GraphOptions({ graph, onExport }: { graph: GraphMeta; onExport: (result
   const anchor = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
   const t = useT();
-  const showDelay = graph.showDelay ?? false;
   const autostart = useSettings((s) => s.autostart);
   return (
     <>
@@ -197,46 +200,33 @@ function GraphOptions({ graph, onExport }: { graph: GraphMeta; onExport: (result
       {open && (
         <Popover anchor={anchor} onClose={() => setOpen(false)}>
           <div className="ag-graph-options">
-            <label className="ag-graph-options__check">
-              <input
-                type="checkbox"
-                checked={graph.showVolume ?? true}
-                onChange={(e) => setPrefs(graph.id, { showVolume: e.currentTarget.checked })}
-              />
-              <span>
-                {t("graph_volume_sliders")}
-                <small>{t("graph_volume_sliders_hint")}</small>
-              </span>
-            </label>
-            <label className="ag-graph-options__check">
-              <input
-                type="checkbox"
-                checked={graph.showBalance ?? false}
-                onChange={(e) => setPrefs(graph.id, { showBalance: e.currentTarget.checked })}
-              />
-              <span>
-                {t("graph_balance_sliders")}
-                <small>{t("graph_balance_sliders_hint")}</small>
-              </span>
-            </label>
             <div className="ag-graph-options__row">
-              <label className="ag-graph-options__check">
-                <input
-                  type="checkbox"
-                  checked={showDelay}
-                  onChange={(e) => setPrefs(graph.id, { showDelay: e.currentTarget.checked })}
-                />
-                <span>
-                  {t("graph_delay_sliders")}
-                  <small>{t("graph_delay_sliders_hint")}</small>
-                </span>
-              </label>
-              <SecondsField
+              <span className="ag-graph-options__text">
+                {t("graph_delay_range")}
+                <small>{t("graph_delay_range_hint")}</small>
+              </span>
+              <LimitField
                 value={graph.delayLimit ?? 0.5}
                 max={MAX_DELAY_LIMIT}
-                disabled={!showDelay}
+                digits={3}
+                prefix="±"
+                unit={t("seconds_short")}
                 title={t("graph_delay_limit", { max: MAX_DELAY_LIMIT })}
                 onChange={(delayLimit) => setPrefs(graph.id, { delayLimit })}
+              />
+            </div>
+            <div className="ag-graph-options__row">
+              <span className="ag-graph-options__text">
+                {t("graph_volume_range")}
+                <small>{t("graph_volume_range_hint")}</small>
+              </span>
+              <LimitField
+                value={Math.round((graph.volumeLimit ?? 2) * 100)}
+                max={MAX_VOLUME_LIMIT * 100}
+                digits={0}
+                unit="%"
+                title={t("graph_volume_limit", { max: MAX_VOLUME_LIMIT * 100 })}
+                onChange={(percent) => setPrefs(graph.id, { volumeLimit: percent / 100 })}
               />
             </div>
             <label className={`ag-graph-options__check${autostart ? "" : " is-disabled"}`}>

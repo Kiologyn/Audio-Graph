@@ -4,10 +4,12 @@ import {
   Controls,
   MarkerType,
   MiniMap,
+  Panel,
   ReactFlow,
   useReactFlow,
   type DefaultEdgeOptions,
   type IsValidConnection,
+  type Viewport,
   type XYPosition,
 } from "@xyflow/react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
@@ -15,9 +17,11 @@ import { useShallow } from "zustand/react/shallow";
 import { useT } from "../i18n";
 import { resolvedTheme, useSettings } from "../settings";
 import AudioNodeView from "./AudioNodeView";
+import { MAX_ZOOM, MIN_ZOOM, openingView, sameView, viewFor, type Camera, type Size } from "./camera";
 import { useEngine } from "./engine";
-import { KindIcon } from "./icons";
+import { Icon, KindIcon } from "./icons";
 import { useGraph } from "./store";
+import { useSystemVolumePolling } from "./systemVolume";
 import { KIND_ORDER, NODE_KINDS, type AudioEdge, type AudioNode, type AudioNodeKind } from "./types";
 
 const nodeTypes = { audio: AudioNodeView };
@@ -34,6 +38,11 @@ const MINIMAP_COLORS: Record<AudioNodeKind, string> = {
   cable: "#e5a02a",
   system: "#8c96a6",
 };
+
+// about half of a new node: it is placed with its middle where it goes
+const NODE_MIDDLE = { x: 100, y: 45 };
+// how far a new node moves off another one standing right there
+const NODE_STEP = 24;
 
 // an arrow into itself makes no sense; addEdge drops duplicate edges
 const isValidConnection: IsValidConnection<AudioEdge> = (c) => c.source !== c.target;
@@ -64,9 +73,7 @@ export function Canvas() {
   const reconnected = useRef(true);
   const reconnectFrom = useRef<XYPosition | null>(null);
   const setViewport = useGraph((s) => s.setViewport);
-  // the graph's camera is needed only on mount, after that the canvas manages it
-  const [initialViewport] = useState(() => useGraph.getState().viewport);
-  const { screenToFlowPosition, deleteElements } = useReactFlow<AudioNode, AudioEdge>();
+  const { screenToFlowPosition, deleteElements, getViewport, setViewport: moveCamera } = useReactFlow<AudioNode, AudioEdge>();
   const status = useEngine((s) => s.status);
   const graphId = useGraph((s) => s.meta?.id);
   // edges the engine reported a problem with are drawn as red dashes
@@ -85,6 +92,50 @@ export function Canvas() {
   const theme = useSettings((s) => s.theme);
   const hideMinimap = useSettings((s) => s.hideMinimap);
   const t = useT();
+  useSystemVolumePolling();
+
+  // The camera is the view as it was left by hand, with the canvas size it was left on; the view on the canvas
+  // follows from it and the size now. So nothing but the user's own moves reaches the graph's file, and a window
+  // that changes size and comes back shows what it showed, even past a zoom limit
+  const camera = useRef<Camera | null>(null);
+  // the view the canvas took by itself, to tell it from a move by hand
+  const placed = useRef<Viewport | null>(null);
+  const size = useRef<Size | null>(null);
+  // how the view opens depends on the canvas size: the flow waits for it
+  const [opening, setOpening] = useState<{ view: Viewport | null } | null>(null);
+  useLayoutEffect(() => {
+    const box = wrapper.current;
+    if (!box) return;
+    const follow = () => {
+      const now = { width: box.clientWidth, height: box.clientHeight };
+      // a minimized window has no size to keep
+      if (now.width === 0 || now.height === 0) return;
+      const before = size.current;
+      size.current = now;
+      if (!before) {
+        const { viewport, nodes } = useGraph.getState();
+        const { camera: left, view } = openingView(viewport, nodes, now);
+        camera.current = left;
+        placed.current = view;
+        setOpening({ view });
+      } else if (before.width !== now.width || before.height !== now.height) {
+        camera.current ??= { ...getViewport(), ...before };
+        placed.current = viewFor(camera.current, now);
+        moveCamera(placed.current);
+      }
+    };
+    follow();
+    const observer = new ResizeObserver(follow);
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, [getViewport, moveCamera]);
+
+  const onMoveEnd = (viewport: Viewport) => {
+    if (placed.current && sameView(viewport, placed.current)) return;
+    placed.current = null;
+    camera.current = { ...viewport, ...size.current };
+    setViewport(camera.current);
+  };
 
   // Ctrl+Z undoes, Ctrl+Y and Ctrl+Shift+Z redo. By key code, so it works
   // in other keyboard layouts too. Text fields have the browser's own text undo;
@@ -135,70 +186,99 @@ export function Canvas() {
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   };
 
+  // the add button: the same menu under it, and the new node goes to the middle of the view
+  const openAddMenu = (e: ReactMouseEvent<HTMLButtonElement>) => {
+    if (menu) {
+      setMenu(null);
+      return;
+    }
+    const box = wrapper.current!.getBoundingClientRect();
+    const button = e.currentTarget.getBoundingClientRect();
+    const middle = screenToFlowPosition({ x: box.left + box.width / 2, y: box.top + box.height / 2 });
+    const flow = { x: middle.x - NODE_MIDDLE.x, y: middle.y - NODE_MIDDLE.y };
+    while (nodes.some((n) => n.position.x === flow.x && n.position.y === flow.y)) {
+      flow.x += NODE_STEP;
+      flow.y += NODE_STEP;
+    }
+    setMenu({ type: "pane", x: button.left - box.left, y: button.bottom - box.top + 4, flow });
+  };
+
   return (
     // the canvas doesn't need the WebView system menu (Back, Refresh, Inspect)
     <div className="ag-canvas" ref={wrapper} onContextMenu={(e) => e.preventDefault()}>
-      <ReactFlow<AudioNode, AudioEdge>
-        nodes={nodes}
-        edges={shownEdges}
-        nodeTypes={nodeTypes}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        onConnect={onConnect}
-        reconnectRadius={14}
-        // the selected arrow is raised to the top, so on a shared port it is the one grabbed
-        elevateEdgesOnSelect
-        onReconnectStart={(e) => {
-          reconnected.current = false;
-          reconnectFrom.current = { x: e.clientX, y: e.clientY };
-        }}
-        onReconnect={(oldEdge, connection) => {
-          reconnected.current = true;
-          onReconnect(oldEdge, connection);
-        }}
-        onReconnectEnd={(e, edge) => {
-          const p = "changedTouches" in e ? e.changedTouches[0] : e;
-          const from = reconnectFrom.current;
-          const dragged = from !== null && Math.hypot(p.clientX - from.x, p.clientY - from.y) > 6;
-          if (!reconnected.current && dragged) removeEdge(edge.id);
-          reconnected.current = true;
-          reconnectFrom.current = null;
-        }}
-        isValidConnection={isValidConnection}
-        defaultEdgeOptions={defaultEdgeOptions}
-        deleteKeyCode={["Delete", "Backspace"]}
-        colorMode={theme === "system" ? "system" : resolvedTheme(theme)}
-        proOptions={{ hideAttribution: true }}
-        // a new graph is fit to the window, a saved one opens where it was left
-        fitView={!initialViewport}
-        fitViewOptions={{ padding: 0.3, maxZoom: 1 }}
-        defaultViewport={initialViewport ?? undefined}
-        onPaneClick={() => setMenu(null)}
-        onMoveStart={() => setMenu(null)}
-        onMoveEnd={(_, viewport) => setViewport(viewport)}
-        onPaneContextMenu={(e) => {
-          e.preventDefault();
-          setMenu({ type: "pane", ...local(e), flow: screenToFlowPosition({ x: e.clientX, y: e.clientY }) });
-        }}
-        onNodeContextMenu={(e, node) => {
-          e.preventDefault();
-          setMenu({ type: "node", ...local(e), nodeId: node.id });
-        }}
-        onEdgeContextMenu={(e, edge) => {
-          e.preventDefault();
-          setMenu({ type: "edge", ...local(e), edgeId: edge.id });
-        }}
-        onSelectionContextMenu={(e) => {
-          e.preventDefault();
-          setMenu({ type: "selection", ...local(e) });
-        }}
-      >
-        <Background variant={BackgroundVariant.Dots} gap={20} size={1.5} />
-        <Controls showInteractive={false} />
-        {!hideMinimap && (
-          <MiniMap pannable zoomable nodeColor={(n) => MINIMAP_COLORS[(n as AudioNode).data.kind]} />
-        )}
-      </ReactFlow>
+      {opening && (
+        <ReactFlow<AudioNode, AudioEdge>
+          nodes={nodes}
+          edges={shownEdges}
+          nodeTypes={nodeTypes}
+          minZoom={MIN_ZOOM}
+          maxZoom={MAX_ZOOM}
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          onConnect={onConnect}
+          reconnectRadius={14}
+          // the selected arrow is raised to the top, so on a shared port it is the one grabbed
+          elevateEdgesOnSelect
+          onReconnectStart={(e) => {
+            reconnected.current = false;
+            reconnectFrom.current = { x: e.clientX, y: e.clientY };
+          }}
+          onReconnect={(oldEdge, connection) => {
+            reconnected.current = true;
+            onReconnect(oldEdge, connection);
+          }}
+          onReconnectEnd={(e, edge) => {
+            const p = "changedTouches" in e ? e.changedTouches[0] : e;
+            const from = reconnectFrom.current;
+            const dragged = from !== null && Math.hypot(p.clientX - from.x, p.clientY - from.y) > 6;
+            if (!reconnected.current && dragged) removeEdge(edge.id);
+            reconnected.current = true;
+            reconnectFrom.current = null;
+          }}
+          isValidConnection={isValidConnection}
+          defaultEdgeOptions={defaultEdgeOptions}
+          deleteKeyCode={["Delete", "Backspace"]}
+          colorMode={theme === "system" ? "system" : resolvedTheme(theme)}
+          proOptions={{ hideAttribution: true }}
+          // a new graph is fit to the window, a saved one opens where it was left
+          fitView={!opening.view}
+          fitViewOptions={{ padding: 0.3, maxZoom: 1 }}
+          defaultViewport={opening.view ?? undefined}
+          // the canvas may have changed size while the flow was starting
+          onInit={() => placed.current && moveCamera(placed.current)}
+          onPaneClick={() => setMenu(null)}
+          onMoveStart={() => setMenu(null)}
+          onMoveEnd={(_, viewport) => onMoveEnd(viewport)}
+          onPaneContextMenu={(e) => {
+            e.preventDefault();
+            setMenu({ type: "pane", ...local(e), flow: screenToFlowPosition({ x: e.clientX, y: e.clientY }) });
+          }}
+          onNodeContextMenu={(e, node) => {
+            e.preventDefault();
+            setMenu({ type: "node", ...local(e), nodeId: node.id });
+          }}
+          onEdgeContextMenu={(e, edge) => {
+            e.preventDefault();
+            setMenu({ type: "edge", ...local(e), edgeId: edge.id });
+          }}
+          onSelectionContextMenu={(e) => {
+            e.preventDefault();
+            setMenu({ type: "selection", ...local(e) });
+          }}
+        >
+          <Background variant={BackgroundVariant.Dots} gap={20} size={1.5} />
+          <Panel position="top-left">
+            <button className="ag-add-node" onClick={openAddMenu}>
+              <Icon name="plus" size={14} />
+              {t("add_node")}
+            </button>
+          </Panel>
+          <Controls showInteractive={false} />
+          {!hideMinimap && (
+            <MiniMap pannable zoomable nodeColor={(n) => MINIMAP_COLORS[(n as AudioNode).data.kind]} />
+          )}
+        </ReactFlow>
+      )}
 
       {menu && (
         <div

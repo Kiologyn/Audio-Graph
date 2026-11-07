@@ -1,7 +1,7 @@
 //! The system's audio device list. Enumeration depends on the platform,
 //! the module looks the same from outside.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -13,7 +13,7 @@ pub use watch::watch;
 #[cfg(windows)]
 pub(crate) mod win;
 
-#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Flow {
     /// An output device: sound is played into it (speakers, headphones, a cable's input)

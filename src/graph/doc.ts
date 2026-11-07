@@ -1,5 +1,14 @@
-import type { Viewport } from "@xyflow/react";
-import { NODE_KINDS, type AudioEdge, type AudioNode, type AudioNodeKind, type AppRef, type DeviceRef } from "./types";
+import type { Camera } from "./camera";
+import {
+  NODE_KINDS, NO_GATE,
+  nodeSliders,
+  type AudioEdge,
+  type AudioNode,
+  type AudioNodeKind,
+  type AppRef,
+  type DeviceRef,
+  type NodeSlider,
+} from "./types";
 
 /** The graph file format. Matches graphs.rs, independent of React Flow. */
 export type GraphDoc = {
@@ -8,23 +17,19 @@ export type GraphDoc = {
   name: string;
   createdAt: number;
   updatedAt: number;
-  viewport: Viewport | null;
+  viewport: Camera | null;
   nodes: DocNode[];
   edges: DocEdge[];
-  /** Volume sliders on nodes */
-  showVolume: boolean;
-  /** Delay sliders on output nodes; while off, the graph's delays aren't applied */
-  showDelay: boolean;
-  /** The delay sliders' range: from minus this many seconds to plus */
+  /** The delay sliders' range: from minus this many seconds to plus (cables from 0) */
   delayLimit: number;
+  /** The volume sliders' maximum: 2 is 200% */
+  volumeLimit: number;
   /** Start the graph when the app starts with the system */
   startOnLaunch: boolean;
-  /** Balance sliders on nodes; while off, the graph's balances aren't applied */
-  showBalance: boolean;
 };
 
 /** The widest delay slider range, matches MAX_DELAY_LIMIT in graphs.rs */
-export const MAX_DELAY_LIMIT = 1;
+export const MAX_DELAY_LIMIT = 600;
 
 export type DocNode = {
   id: string;
@@ -35,17 +40,23 @@ export type DocNode = {
   cable: string | null;
   app: AppRef | null;
   volume: number;
-  /** Output delay in seconds; the engine gets it with autosave */
+  /** The system's slider while the graph runs; null leaves it alone */
+  systemVolume: number | null;
+  /** Output or cable delay in seconds; the engine gets it with autosave */
   delay: number;
   /** Left-right balance, -1..1 */
   balance: number;
+  /** A cable's noise gate in dB */
+  gate: number;
+  /** The sliders that stay on the node */
+  pinned: NodeSlider[];
   position: { x: number; y: number };
 };
 
 export type DocEdge = { id: string; source: string; target: string };
 
 /** What the graph's options menu changes */
-export type GraphPrefs = Pick<GraphDoc, "showVolume" | "showBalance" | "showDelay" | "delayLimit" | "startOnLaunch">;
+export type GraphPrefs = Pick<GraphDoc, "delayLimit" | "volumeLimit" | "startOnLaunch">;
 
 export type GraphMeta = Pick<GraphDoc, "id" | "name" | "createdAt" | "updatedAt"> & GraphPrefs;
 
@@ -63,8 +74,11 @@ export function nodesToDoc(nodes: AudioNode[]): DocNode[] {
       cable: meta.pickCable ? (n.data.cable ?? null) : null,
       app: meta.pickApp ? (n.data.app ?? null) : null,
       volume: meta.maxVolume ? (n.data.volume ?? 1) : 1,
+      systemVolume: meta.systemVolume ? (n.data.systemVolume ?? null) : null,
       delay: meta.delay ? (n.data.delay ?? 0) : 0,
       balance: meta.balance ? (n.data.balance ?? 0) : 0,
+      gate: meta.gate ? (n.data.gate ?? NO_GATE) : NO_GATE,
+      pinned: nodeSliders(n.data.kind).filter((slider) => n.data.pinned?.includes(slider)),
       position: { x: n.position.x, y: n.position.y },
     };
   });
@@ -87,8 +101,11 @@ export function nodesFromDoc(nodes: DocNode[]): AudioNode[] {
       cable: n.cable ?? null,
       app: n.app ?? null,
       volume: n.volume ?? 1,
+      systemVolume: n.systemVolume ?? null,
       delay: n.delay ?? 0,
       balance: n.balance ?? 0,
+      gate: n.gate ?? NO_GATE,
+      pinned: n.pinned ?? [],
     },
   }));
 }

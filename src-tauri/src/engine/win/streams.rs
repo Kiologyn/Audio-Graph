@@ -1,16 +1,12 @@
-//! Engine streams on WASAPI: every recording device and every output device
-//! gets its own stream. Recording hands packets to all links, output mixes its links.
+//! The device streams on WASAPI: a thread per device, run by engine/streams.rs.
 
-use super::super::link::{link, LinkReader, CHANNELS, RATE};
-use super::super::plan::{Gain, Stream, LOOPBACK_PREFIX};
-use super::super::ring::Producer;
-use super::super::{DeviceError, StreamStatus};
+use super::super::link::{CHANNELS, RATE};
+use super::super::mixer::Mixer;
+use super::super::plan::LOOPBACK_PREFIX;
+use super::super::streams::{lock, Recipients};
 use crate::com::{wide, ComGuard};
-use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
-use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::sync::Mutex;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 use windows::Win32::Media::Audio::{
@@ -25,8 +21,6 @@ use windows::Win32::System::Threading::{
     AvRevertMmThreadCharacteristics, AvSetMmThreadCharacteristicsW, CreateEventW, WaitForSingleObject,
 };
 
-/// A failed stream (device gone or busy) restarts no more often than this
-const RETRY: Duration = Duration::from_secs(2);
 /// The device buffer, in hundreds of nanoseconds
 const BUFFER_HNS: i64 = 200_000;
 
@@ -43,180 +37,11 @@ const FORMAT: WAVEFORMATEX = WAVEFORMATEX {
 const FLAGS: u32 =
     AUDCLNT_STREAMFLAGS_EVENTCALLBACK | AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
 
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    // a panic in one audio thread must not bring down the others
-    m.lock().unwrap_or_else(|e| e.into_inner())
-}
-
 pub(super) fn describe(e: windows::core::Error) -> String {
     match e.code() {
         AUDCLNT_E_DEVICE_INVALIDATED => tr!("error_device_disconnected"),
         AUDCLNT_E_DEVICE_IN_USE => tr!("error_device_exclusive"),
         _ => e.message(),
-    }
-}
-
-/// A device's link list; changes on the fly, the stream reads it on every packet
-type Links<T> = Arc<Mutex<Vec<(String, T)>>>;
-type Body<T> = fn(&str, &Mutex<Vec<(String, T)>>, &AtomicBool, &AtomicBool) -> Result<(), String>;
-
-/// The stream of one device
-struct Worker<T> {
-    links: Links<T>,
-    stop: Arc<AtomicBool>,
-    /// The device is open and sound flows
-    working: Arc<AtomicBool>,
-    thread: Option<JoinHandle<Result<(), String>>>,
-    started: Option<Instant>,
-    error: Option<String>,
-}
-
-impl<T: Send + 'static> Worker<T> {
-    fn new() -> Self {
-        Self {
-            links: Arc::new(Mutex::new(Vec::new())),
-            stop: Arc::new(AtomicBool::new(false)),
-            working: Arc::new(AtomicBool::new(false)),
-            thread: None,
-            started: None,
-            error: None,
-        }
-    }
-
-    /// Starts the stream if it isn't running; a failed one at most once per RETRY
-    fn supervise(&mut self, device: &str, body: Body<T>) {
-        if self.thread.as_ref().is_some_and(|t| !t.is_finished()) {
-            return;
-        }
-        if let Some(thread) = self.thread.take() {
-            self.error = match thread.join() {
-                Ok(result) => result.err(),
-                Err(_) => Some(tr!("error_stream_crashed")),
-            };
-        }
-        if self.started.is_some_and(|t| t.elapsed() < RETRY) {
-            return;
-        }
-        let (device, links, stop, working) = (device.to_string(), self.links.clone(), self.stop.clone(), self.working.clone());
-        self.started = Some(Instant::now());
-        self.working.store(false, Ordering::Relaxed);
-        self.thread = std::thread::Builder::new()
-            .name(format!("audio {device}"))
-            .spawn(move || body(&device, &links, &stop, &working))
-            .ok();
-    }
-
-    /// The next supervise may start a failed stream at once
-    fn retry_now(&mut self) {
-        self.started = None;
-    }
-
-    fn error(&self) -> Option<String> {
-        if self.working.load(Ordering::Relaxed) {
-            None
-        } else {
-            self.error.clone()
-        }
-    }
-
-    fn shutdown(mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
-    }
-}
-
-fn device_error<T: Send + 'static>(device: &str, worker: Option<&Worker<T>>) -> Option<DeviceError> {
-    worker.and_then(|w| w.error()).map(|message| DeviceError {
-        // a loopback's errors belong to its output device: the interface finds the node by it
-        device: device.strip_prefix(LOOPBACK_PREFIX).unwrap_or(device).to_string(),
-        message,
-    })
-}
-
-#[derive(Default)]
-pub struct Streams {
-    captures: HashMap<String, Worker<Producer>>,
-    renders: HashMap<String, Worker<LinkReader>>,
-}
-
-impl Streams {
-    /// Brings streams in line with the plan on the fly: new links are added, extra ones removed
-    pub fn apply(&mut self, plan: &[Stream]) -> Vec<StreamStatus> {
-        // link → volume and delay
-        let wanted: BTreeMap<(&str, &str), (Gain, f32)> = plan
-            .iter()
-            .flat_map(|s| s.sources.iter().map(|src| ((src.device.as_str(), s.sink.as_str()), (src.gain, src.delay))))
-            .collect();
-
-        for (device, w) in &self.captures {
-            lock(&w.links).retain(|(sink, _)| wanted.contains_key(&(device.as_str(), sink.as_str())));
-        }
-        for (device, w) in &self.renders {
-            let mut links = lock(&w.links);
-            links.retain(|(source, _)| wanted.contains_key(&(source.as_str(), device.as_str())));
-            // volume and delay change on the fly without recreating the link
-            for (source, reader) in links.iter() {
-                let (gain, delay) = wanted[&(source.as_str(), device.as_str())];
-                reader.set_gain(gain);
-                reader.set_delay(delay);
-            }
-        }
-        for (&(source, sink), &(gain, delay)) in &wanted {
-            let capture = self.captures.entry(source.to_string()).or_insert_with(Worker::new);
-            if lock(&capture.links).iter().any(|(s, _)| s == sink) {
-                continue;
-            }
-            let (producer, reader) = link();
-            reader.set_gain(gain);
-            reader.set_delay(delay);
-            lock(&capture.links).push((sink.to_string(), producer));
-            let render = self.renders.entry(sink.to_string()).or_insert_with(Worker::new);
-            lock(&render.links).push((source.to_string(), reader));
-        }
-
-        // devices without links are closed
-        let unused: Vec<String> = self.captures.iter().filter(|(_, w)| lock(&w.links).is_empty()).map(|(d, _)| d.clone()).collect();
-        for device in unused {
-            self.captures.remove(&device).unwrap().shutdown();
-        }
-        let unused: Vec<String> = self.renders.iter().filter(|(_, w)| lock(&w.links).is_empty()).map(|(d, _)| d.clone()).collect();
-        for device in unused {
-            self.renders.remove(&device).unwrap().shutdown();
-        }
-
-        for (device, w) in &mut self.captures {
-            w.supervise(device, capture_thread);
-        }
-        for (device, w) in &mut self.renders {
-            w.supervise(device, render_thread);
-        }
-
-        plan.iter()
-            .map(|s| StreamStatus {
-                sink: s.sink.clone(),
-                sources: s.sources.iter().map(|src| src.device.clone()).collect(),
-                errors: device_error(&s.sink, self.renders.get(&s.sink))
-                    .into_iter()
-                    .chain(s.sources.iter().filter_map(|src| device_error(&src.device, self.captures.get(&src.device))))
-                    .collect(),
-            })
-            .collect()
-    }
-
-    pub fn retry_now(&mut self) {
-        self.captures.values_mut().for_each(Worker::retry_now);
-        self.renders.values_mut().for_each(Worker::retry_now);
-    }
-
-    pub fn shutdown(&mut self) {
-        for (_, w) in self.captures.drain() {
-            w.shutdown();
-        }
-        for (_, w) in self.renders.drain() {
-            w.shutdown();
-        }
     }
 }
 
@@ -271,9 +96,35 @@ pub(super) fn open(device: &str) -> Result<(IAudioClient, Event), String> {
     }
 }
 
-fn capture_thread(device: &str, links: &Mutex<Vec<(String, Producer)>>, stop: &AtomicBool, working: &AtomicBool) -> Result<(), String> {
+/// A stream of silence on an output device, for as long as it is held
+struct KeepPlaying(IAudioClient, #[allow(dead_code)] Event);
+
+impl KeepPlaying {
+    /// While a device plays nothing, its loopback gives no packets: a link would lose the pauses,
+    /// and a delay would shrink by each of them. Started once, the stream keeps the device going
+    fn start(device: &str) -> Result<Self, String> {
+        let (client, event) = open(device)?;
+        unsafe {
+            let render: IAudioRenderClient = client.GetService().map_err(describe)?;
+            let size = client.GetBufferSize().map_err(describe)?;
+            render.GetBuffer(size).map_err(describe)?;
+            render.ReleaseBuffer(size, AUDCLNT_BUFFERFLAGS_SILENT.0 as u32).map_err(describe)?;
+            client.Start().map_err(describe)?;
+        }
+        Ok(Self(client, event))
+    }
+}
+
+impl Drop for KeepPlaying {
+    fn drop(&mut self) {
+        let _ = unsafe { self.0.Stop() };
+    }
+}
+
+pub(in crate::engine) fn capture_thread(device: &str, links: &Mutex<Recipients>, stop: &AtomicBool, working: &AtomicBool) -> Result<(), String> {
     let _com = ComGuard::init();
     let _priority = ProAudio::enter();
+    let _playing = device.strip_prefix(LOOPBACK_PREFIX).map(KeepPlaying::start).transpose()?;
     let (client, event) = open(device)?;
     let result = unsafe { capture_loop(&client, &event, links, stop, working) };
     let _ = unsafe { client.Stop() };
@@ -283,7 +134,7 @@ fn capture_thread(device: &str, links: &Mutex<Vec<(String, Producer)>>, stop: &A
 unsafe fn capture_loop(
     client: &IAudioClient,
     event: &Event,
-    links: &Mutex<Vec<(String, Producer)>>,
+    links: &Mutex<Recipients>,
     stop: &AtomicBool,
     working: &AtomicBool,
 ) -> windows::core::Result<()> {
@@ -312,11 +163,11 @@ unsafe fn capture_loop(
     Ok(())
 }
 
-fn render_thread(device: &str, links: &Mutex<Vec<(String, LinkReader)>>, stop: &AtomicBool, working: &AtomicBool) -> Result<(), String> {
+pub(in crate::engine) fn render_thread(device: &str, mixer: &Mutex<Mixer>, stop: &AtomicBool, working: &AtomicBool) -> Result<(), String> {
     let _com = ComGuard::init();
     let _priority = ProAudio::enter();
     let (client, event) = open(device)?;
-    let result = unsafe { render_loop(&client, &event, links, stop, working) };
+    let result = unsafe { render_loop(&client, &event, mixer, stop, working) };
     let _ = unsafe { client.Stop() };
     result.map_err(describe)
 }
@@ -324,7 +175,7 @@ fn render_thread(device: &str, links: &Mutex<Vec<(String, LinkReader)>>, stop: &
 unsafe fn render_loop(
     client: &IAudioClient,
     event: &Event,
-    links: &Mutex<Vec<(String, LinkReader)>>,
+    mixer: &Mutex<Mixer>,
     stop: &AtomicBool,
     working: &AtomicBool,
 ) -> windows::core::Result<()> {
@@ -343,14 +194,7 @@ unsafe fn render_loop(
             continue;
         }
         let out = &mut mix[..frames as usize * CHANNELS];
-        out.fill(0.0);
-        for (_, reader) in lock(links).iter_mut() {
-            reader.mix_into(out);
-        }
-        // the sum of several sources can go out of range
-        for s in out.iter_mut() {
-            *s = s.clamp(-1.0, 1.0);
-        }
+        lock(mixer).play(out);
         let data = render.GetBuffer(frames)?;
         std::ptr::copy_nonoverlapping(out.as_ptr(), data as *mut f32, out.len());
         render.ReleaseBuffer(frames, 0)?;
@@ -360,9 +204,14 @@ unsafe fn render_loop(
 
 #[cfg(test)]
 mod tests {
+    use super::super::super::levels::Levels;
+    use super::super::super::link::link;
+    use super::super::super::plan::{Gain, Stream};
     use super::super::super::ring::ring;
+    use super::super::super::streams::{Streams, Worker};
     use super::*;
     use crate::devices::{list, DeviceState, Flow};
+    use std::time::{Duration, Instant};
 
     /// Line 1 of Virtual Audio Cable: one line, so the tone played into its input comes out of its output
     fn vac(flow: Flow) -> String {
@@ -413,6 +262,27 @@ mod tests {
         tone_through(&render_id, &format!("{LOOPBACK_PREFIX}{render_id}"), 0.0, [1.0; 2]);
     }
 
+    /// Nothing plays into the VAC input, yet its loopback keeps giving packets: the pauses stay in the link.
+    /// cargo test silent_loopback_keeps_time -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn silent_loopback_keeps_time() {
+        let _com = ComGuard::init();
+        let device = format!("{LOOPBACK_PREFIX}{}", vac(Flow::Render));
+        let (producer, reader) = ring(RATE * CHANNELS * 4);
+        let links = Mutex::new(vec![((String::new(), 0), producer)]);
+        let (stop, working) = (AtomicBool::new(false), AtomicBool::new(false));
+        let frames = std::thread::scope(|s| {
+            let thread = s.spawn(|| capture_thread(&device, &links, &stop, &working));
+            std::thread::sleep(Duration::from_secs(2));
+            stop.store(true, Ordering::Relaxed);
+            thread.join().unwrap().unwrap();
+            reader.len() / CHANNELS
+        });
+        println!("{frames} frames in 2 s");
+        assert!(frames > RATE * 3 / 2, "{frames}");
+    }
+
     /// Turns the VAC Line 1 recording device off and on under a running link (Line 1 → Line 2):
     /// the stream must come back by itself. Changes the system state for a moment:
     /// cargo test device_comes_back -- --ignored --nocapture
@@ -430,11 +300,7 @@ mod tests {
                 .id
         };
         let (source, sink) = (line("1", Flow::Capture), line("2", Flow::Render));
-        let plan = [Stream {
-            sink: sink.clone(),
-            sources: vec![super::super::super::plan::Source { device: source.clone(), gain: [1.0; 2], delay: 0.0 }],
-            output: true,
-        }];
+        let plan = [Stream::through(&sink, true, &[(&source, [1.0; 2], 0.0)])];
         let mut streams = Streams::default();
         let errors = |streams: &mut Streams| streams.apply(&plan)[0].errors.clone();
         let wait = |streams: &mut Streams, broken: bool| {
@@ -466,18 +332,89 @@ mod tests {
         streams.shutdown();
     }
 
+    /// A tone from VAC Line 1 goes into Line 2 in two layers: the left channel at once, the right one
+    /// 300 ms later. Only VAC lines sound; Line 2 is turned on for the test if it is off:
+    /// cargo test vac_layers -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn vac_layers() {
+        let _com = ComGuard::init();
+        let _defaults = crate::devices::win::KeepDefaults::new();
+        let find = |n: &str, flow: Flow| {
+            let devices = list().unwrap();
+            let device = devices.into_iter().find(|d| d.name.starts_with(&format!("Line {n} (Virtual Audio Cable")) && d.flow == flow);
+            device.expect("no such VAC line")
+        };
+        let line2 = [find("2", Flow::Render), find("2", Flow::Capture)];
+        let off: Vec<String> = line2.iter().filter(|d| d.state != DeviceState::Active).map(|d| d.id.clone()).collect();
+        if !off.is_empty() {
+            crate::devices::set_enabled(&off, true).unwrap();
+            std::thread::sleep(Duration::from_millis(500));
+        }
+
+        let source = find("1", Flow::Capture).id;
+        let plan = [Stream::through(&find("2", Flow::Render).id, true, &[(&source, [1.0, 0.0], 0.0), (&source, [0.0, 1.0], 0.3)])];
+        let mut streams = Streams::default();
+        streams.apply(&plan);
+
+        let mut capture = Worker::<Recipients>::new();
+        let (heard_in, heard) = ring(RATE * CHANNELS);
+        lock(&capture.links).push((("test".into(), 0), heard_in));
+        capture.supervise(&find("2", Flow::Capture).id, capture_thread);
+        let mut render = Worker::<Mixer>::new();
+        let (tone, reader) = link();
+        lock(&render.links).links.push((("test".into(), 0), reader));
+        render.supervise(&find("1", Flow::Render).id, render_thread);
+        std::thread::sleep(Duration::from_millis(400));
+
+        let started = Instant::now();
+        let (mut phase, mut onset) = (0usize, [None; 2]);
+        let mut buf = vec![0.0f32; RATE * CHANNELS];
+        while started.elapsed() < Duration::from_millis(1500) {
+            let due = (started.elapsed().as_secs_f64() * RATE as f64) as usize;
+            let packet: Vec<f32> = (phase..due)
+                .flat_map(|i| {
+                    let s = 0.5 * (2.0 * std::f32::consts::PI * 440.0 * i as f32 / RATE as f32).sin();
+                    [s, s]
+                })
+                .collect();
+            phase = due;
+            tone.push(&packet);
+            std::thread::sleep(Duration::from_millis(5));
+            buf.fill(0.0);
+            let n = heard.mix_into(&mut buf);
+            for (i, s) in buf[..n].iter().enumerate() {
+                if onset[i % 2].is_none() && s.abs() > 0.05 {
+                    onset[i % 2] = Some(started.elapsed());
+                }
+            }
+        }
+        render.shutdown();
+        capture.shutdown();
+        streams.shutdown();
+        if !off.is_empty() {
+            crate::devices::set_enabled(&off, false).unwrap();
+        }
+        let [left, right] = onset.map(|o| o.expect("a channel stayed silent").as_secs_f32());
+        println!("left after {left:.3} s, right after {right:.3} s");
+        assert!((right - left - 0.3).abs() < 0.05, "{left} {right}");
+    }
+
     /// Plays a tone through a link with the delay and volume; returns when it was heard and how loud per channel
     fn tone_through(render_id: &str, capture_id: &str, delay: f32, gain: Gain) -> (Duration, [f64; 2]) {
-        let mut capture = Worker::<Producer>::new();
+        let mut capture = Worker::<Recipients>::new();
         let (heard_in, heard) = ring(RATE * CHANNELS);
-        lock(&capture.links).push(("test".into(), heard_in));
+        lock(&capture.links).push((("test".into(), 0), heard_in));
         capture.supervise(capture_id, capture_thread);
 
-        let mut render = Worker::<LinkReader>::new();
-        let (tone, reader) = link();
+        let mut render = Worker::<Mixer>::new();
+        let (tone, mut reader) = link();
         reader.set_delay(delay);
-        reader.set_gain(gain);
-        lock(&render.links).push(("test".into(), reader));
+        reader.stage = 1;
+        let mut mixer = lock(&render.links);
+        mixer.set_stages(&Stream::through("", true, &[("", gain, 0.0)]).stages, &Levels::default());
+        mixer.links.push((("test".into(), 0), reader));
+        drop(mixer);
         render.supervise(render_id, render_thread);
         std::thread::sleep(Duration::from_millis(300));
         assert!(capture.error().is_none() && render.error().is_none(), "{:?} {:?}", capture.error(), render.error());

@@ -44,17 +44,18 @@ const doc = (id: string): GraphDoc => ({
       cable: null,
       app: null,
       volume: 1,
+      systemVolume: null,
       delay: 0,
       balance: 0,
+      gate: -100,
+      pinned: [],
       position: { x: 0, y: 0 },
     },
   ],
   edges: [],
-  showVolume: true,
-  showDelay: false,
   delayLimit: 0.5,
+  volumeLimit: 2,
   startOnLaunch: false,
-  showBalance: false,
 });
 
 beforeEach(async () => {
@@ -96,10 +97,10 @@ describe("autosave", () => {
   });
 
   it("saves the graph's options with it", async () => {
-    useGraph.getState().setPrefs({ showBalance: true, delayLimit: 0.8 });
+    useGraph.getState().setPrefs({ delayLimit: 0.8 });
     await settle();
     expect(api.saved).toHaveLength(1);
-    expect(api.saved[0]).toMatchObject({ id: "a", showBalance: true, delayLimit: 0.8, showDelay: false, startOnLaunch: false });
+    expect(api.saved[0]).toMatchObject({ id: "a", delayLimit: 0.8, startOnLaunch: false });
   });
 
   it("writes pending changes before another graph opens", async () => {
