@@ -32,7 +32,7 @@ Route audio by drawing it. Connect microphones, headphones, apps and virtual cab
 ## Quick start
 
 1. Download the app from [Releases](https://github.com/Kiologyn/Audio-Graph/releases).
-   - Windows: `setup.msi`, or `portable.exe` with no installation
+   - Windows: the `.msi` installer, or the `portable.exe` file with no installation
    - Linux: `.AppImage`, `.deb` or `.rpm`
 2. **On Windows:** install a [virtual cable driver](#virtual-cables-on-windows), then press *Find cables* in the **Cables** menu.
 3. Add nodes with the *Add node* button or a right click on the canvas, and drag arrows between them.
