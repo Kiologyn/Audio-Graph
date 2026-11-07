@@ -31,6 +31,8 @@ Route audio by drawing it. Connect microphones, headphones, apps and virtual cab
 
 An app can only play into and listen to a device the system knows, and only a driver can add one. A virtual cable is a pair of such devices: apps play into one, and the sound comes out of the other.
 
+Audio Graph can't create these devices by itself, as it does on Linux: Microsoft requires drivers to be signed through it before Windows will load them, so the cables have to come from a signed driver that you install.
+
 | Connection | Without a driver | With a driver |
 | --- | :---: | :---: |
 | App → output device | ✅ | ✅ |
