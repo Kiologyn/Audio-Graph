@@ -1,4 +1,4 @@
-import type { Viewport } from "@xyflow/react";
+import type { Camera } from "./camera";
 import {
   NODE_KINDS, NO_GATE,
   nodeSliders,
@@ -17,7 +17,7 @@ export type GraphDoc = {
   name: string;
   createdAt: number;
   updatedAt: number;
-  viewport: Viewport | null;
+  viewport: Camera | null;
   nodes: DocNode[];
   edges: DocEdge[];
   /** The delay sliders' range: from minus this many seconds to plus (cables from 0) */

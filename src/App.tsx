@@ -1,4 +1,5 @@
 import { getVersion } from "@tauri-apps/api/app";
+import { listen } from "@tauri-apps/api/event";
 import { ReactFlowProvider } from "@xyflow/react";
 import { useEffect, useState } from "react";
 import { CableMenu } from "./graph/CableMenu";
@@ -8,7 +9,7 @@ import { Canvas } from "./graph/Canvas";
 import { useDevices } from "./graph/devices";
 import { useEngine } from "./graph/engine";
 import { GraphMenu } from "./graph/GraphMenu";
-import { useLibrary } from "./graph/library";
+import { quitApp, useLibrary } from "./graph/library";
 import { RunControl } from "./graph/RunControl";
 import { SettingsMenu } from "./graph/SettingsMenu";
 import { dynamicCables } from "./platform";
@@ -52,6 +53,9 @@ export default function App() {
     // the device list is needed right away: it shows which chosen devices are unavailable now
     useDevices.getState().refresh();
     useEngine.getState().init();
+    // the close button without a tray, the tray's menu: the app waits for this before it goes
+    const stop = listen("quit-requested", quitApp);
+    return () => void stop.then((unlisten) => unlisten());
   }, []);
 
   return (

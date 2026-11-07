@@ -1,9 +1,9 @@
-import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { LANGUAGES, useT } from "../i18n";
 import { autostartSupported, dynamicCables, platform } from "../platform";
 import { useSettings, type Lang, type Theme } from "../settings";
 import { Icon } from "./icons";
+import { quitApp } from "./library";
 import { PickerChip, Popover, PopoverItem } from "./Popover";
 
 /** A switch between several options */
@@ -167,7 +167,7 @@ export function SettingsMenu() {
           {/* on Linux the tray icon isn't shown everywhere (GNOME without an extension), and quitting is in its menu;
               without the tray closing the window quits */}
           {platform() === "linux" && tray && (
-            <button className="ag-settings__quit" onClick={() => invoke("app_quit")}>
+            <button className="ag-settings__quit" onClick={quitApp}>
               {t("quit_app")}
               <small>{t("quit_app_hint")}</small>
             </button>

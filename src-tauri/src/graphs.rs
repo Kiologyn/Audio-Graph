@@ -51,11 +51,17 @@ pub struct Position {
     pub y: f64,
 }
 
+/// A view as it was left by hand, with the size of the canvas it was left on: the window's size
+/// when the graph opens may be another. Files of earlier versions have no size
 #[derive(Serialize, Deserialize, Clone, Copy, Debug)]
 pub struct Viewport {
     pub x: f64,
     pub y: f64,
     pub zoom: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
 }
 
 /// A node port's binding to a system device

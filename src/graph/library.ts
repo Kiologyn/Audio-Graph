@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { create } from "zustand";
 import { t } from "../i18n";
@@ -89,12 +90,18 @@ async function saveNow() {
   }
 }
 
-/** Write unsaved changes now (before switching graphs, when the window closes) */
+/** Write unsaved changes now (before switching graphs, before quitting) */
 export function flushSave(): Promise<void> {
   clearTimeout(timer);
   timer = undefined;
   queue = queue.then(saveNow);
   return queue;
+}
+
+/** Quits the app; what is waiting for the autosave goes to disk first */
+export async function quitApp() {
+  await flushSave();
+  await invoke("app_quit");
 }
 
 useGraph.subscribe((state, prev) => {

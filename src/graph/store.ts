@@ -6,11 +6,11 @@ import {
   type Connection,
   type EdgeChange,
   type NodeChange,
-  type Viewport,
   type XYPosition,
 } from "@xyflow/react";
 import { create } from "zustand";
 import { isAnyTranslation, t } from "../i18n";
+import type { Camera } from "./camera";
 import { edgesFromDoc, nodesFromDoc, type GraphDoc, type GraphPrefs } from "./doc";
 import {
   NODE_KINDS, NO_GATE,
@@ -28,14 +28,14 @@ import {
 type GraphState = {
   /** null until the graph is loaded */
   meta: ({ id: string; name: string; createdAt: number } & GraphPrefs) | null;
-  viewport: Viewport | null;
+  viewport: Camera | null;
   nodes: AudioNode[];
   edges: AudioEdge[];
   loadDoc: (doc: GraphDoc) => void;
   unload: () => void;
   setName: (name: string) => void;
   setPrefs: (patch: Partial<GraphPrefs>) => void;
-  setViewport: (viewport: Viewport) => void;
+  setViewport: (viewport: Camera) => void;
   onNodesChange: (changes: NodeChange<AudioNode>[]) => void;
   onEdgesChange: (changes: EdgeChange<AudioEdge>[]) => void;
   onConnect: (connection: Connection) => void;

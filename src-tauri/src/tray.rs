@@ -38,7 +38,7 @@ impl Tray {
                 "toggle" => app.state::<Engine>().toggle(),
                 "stop_all" => app.state::<Engine>().stop_all(),
                 "show" => show_window(app),
-                "quit" => app.exit(0),
+                "quit" => crate::request_quit(app),
                 _ => {}
             })
             .on_tray_icon_event(|tray, event| {
