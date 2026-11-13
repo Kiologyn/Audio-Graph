@@ -477,6 +477,14 @@ fn supervise(
         if changed || std::mem::take(&mut force_emit) {
             let _ = app.emit("engine-status", next);
         }
+        // the app is quitting, and its main thread waits for this answer: nothing before it may wait for that
+        // thread, as the tray's tooltip does
+        if let Some(tx) = reply.take() {
+            backend.shutdown();
+            let _ = tx.send(());
+            return;
+        }
+
         let shows = (running.iter().map(|g| (g.id.clone(), g.name.clone())).collect::<Vec<_>>(), crate::i18n::language());
         if tray_shows.as_ref() != Some(&shows) {
             // the tray is created after the engine and may be off: nothing to update then
@@ -484,12 +492,6 @@ fn supervise(
             if crate::tray::update(&app, &names) {
                 tray_shows = Some(shows);
             }
-        }
-
-        if let Some(tx) = reply.take() {
-            backend.shutdown();
-            let _ = tx.send(());
-            return;
         }
     }
 }
