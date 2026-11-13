@@ -3,6 +3,7 @@ import { useT } from "../i18n";
 import { useSettings } from "../settings";
 import { useCalibration } from "./Calibration";
 import { MAX_DELAY_LIMIT, type GraphMeta } from "./doc";
+import { DEFAULT_DISTANCE_LIMIT, MAX_DISTANCE_LIMIT } from "./space";
 import { MAX_VOLUME_LIMIT } from "./types";
 import { useEngine } from "./engine";
 import { Icon } from "./icons";
@@ -227,6 +228,20 @@ function GraphOptions({ graph, onExport }: { graph: GraphMeta; onExport: (result
                 unit="%"
                 title={t("graph_volume_limit", { max: MAX_VOLUME_LIMIT * 100 })}
                 onChange={(percent) => setPrefs(graph.id, { volumeLimit: percent / 100 })}
+              />
+            </div>
+            <div className="ag-graph-options__row">
+              <span className="ag-graph-options__text">
+                {t("graph_distance_range")}
+                <small>{t("graph_distance_range_hint")}</small>
+              </span>
+              <LimitField
+                value={graph.distanceLimit ?? DEFAULT_DISTANCE_LIMIT}
+                max={MAX_DISTANCE_LIMIT}
+                digits={0}
+                unit={t("metres_short")}
+                title={t("graph_distance_limit", { max: MAX_DISTANCE_LIMIT })}
+                onChange={(distanceLimit) => setPrefs(graph.id, { distanceLimit })}
               />
             </div>
             <label className={`ag-graph-options__check${autostart ? "" : " is-disabled"}`}>

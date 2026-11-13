@@ -10,12 +10,13 @@
 //!   playing into the default output device, its input is what they hear as the microphone.
 //!
 //! A cable is a step of its own in the sound's way, wherever it is carried out: what comes to it is summed,
-//! its noise gate listens to that sum, then its volume and delay act on it. What it passes on is what the next
+//! its noise gate listens to that sum, then its volume, place in space, balance and delay act on it. What it passes on is what the next
 //! node gets. Sound that takes several paths adds up, as two wires into a mixer would (Stage).
 //!
 //! On Linux cables aren't chosen from a list: every cable node is a virtual device of its own,
 //! created while the graph runs (virtualize). The rest of the plan is the same.
 
+use super::spatial::distance_gain;
 use crate::cables::Cable;
 use crate::graphs::{AppRef, DeviceRef, Graph, GraphEdge, GraphNode, NodeKind};
 use serde::Serialize;
@@ -81,9 +82,20 @@ pub struct Stage {
     pub node: String,
     /// Where its sound goes: an earlier stage of the stream, the first one goes into the device
     pub parent: usize,
+    /// The volume and balance, and how far the sound is
     pub gain: Gain,
     /// In dB
     pub gate: f32,
+    /// In metres from the listener: x to the right, y to the front, z up; without one the sound stays as it is
+    pub place: Option<[f32; 3]>,
+}
+
+/// What a node does to the sound at a stage
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Work {
+    gain: Gain,
+    gate: f32,
+    place: Option<[f32; 3]>,
 }
 
 /// What an output device plays: stages, the first being the device's own sum, and the sources going into them
@@ -95,16 +107,17 @@ struct Mix {
 
 impl Default for Mix {
     fn default() -> Self {
-        let root = Stage { id: String::new(), node: String::new(), parent: 0, gain: [1.0; 2], gate: NO_GATE };
+        let root = Stage { id: String::new(), node: String::new(), parent: 0, gain: [1.0; 2], gate: NO_GATE, place: None };
         Self { stages: vec![root], sources: Vec::new() }
     }
 }
 
 impl Mix {
     /// Adds a stage for a node reached by a link (or for the node itself); returns its index
-    fn add_stage(&mut self, parent: usize, link: &str, node: &str, gain: Gain, gate: f32) -> usize {
+    fn add_stage(&mut self, parent: usize, link: &str, node: &str, work: Work) -> usize {
         let id = format!("{}/{link}", self.stages[parent].id);
-        self.stages.push(Stage { id, node: node.to_string(), parent, gain, gate });
+        let Work { gain, gate, place } = work;
+        self.stages.push(Stage { id, node: node.to_string(), parent, gain, gate, place });
         self.stages.len() - 1
     }
 
@@ -140,7 +153,7 @@ impl Stream {
     pub fn through(sink: &str, output: bool, sources: &[(&str, Gain, f32)]) -> Self {
         let mut mix = Mix::default();
         for (i, &(device, gain, delay)) in sources.iter().enumerate() {
-            let stage = mix.add_stage(0, &i.to_string(), "", gain, NO_GATE);
+            let stage = mix.add_stage(0, &i.to_string(), "", Work { gain, gate: NO_GATE, place: None });
             mix.sources.push(Source { device: device.to_string(), delay, stage });
         }
         Self { sink: sink.to_string(), stages: mix.stages, sources: mix.sources, output }
@@ -289,6 +302,8 @@ struct Compiler<'a> {
     delay_limit: f32,
     /// The graph's maximum volume
     volume_limit: f32,
+    /// How far from the listener a source can be in this graph
+    distance_limit: f32,
     /// Where each cable from the list does its work (place_cables)
     sides: HashMap<&'a str, Side>,
 }
@@ -347,6 +362,24 @@ impl<'a> Compiler<'a> {
         }
     }
 
+    /// A cable's place in space, within the graph's distance: a limit lowered later acts on what was set before
+    fn place(&self, node: &GraphNode) -> Option<[f32; 3]> {
+        let place = node.place.filter(|_| node.kind == NodeKind::Cable)?;
+        let at = [place.x, place.y, place.z];
+        let distance = at.iter().map(|v| v * v).sum::<f32>().sqrt();
+        if !distance.is_finite() || distance == 0.0 {
+            return None;
+        }
+        Some(at.map(|v| v * (self.distance_limit / distance).min(1.0)))
+    }
+
+    /// Everything a node does at a stage. How far it is makes it quieter, which is a part of its volume
+    fn work(&self, node: &GraphNode) -> Work {
+        let place = self.place(node);
+        let far = place.map_or(1.0, distance_gain);
+        Work { gain: self.gain(node).map(|g| g * far), gate: self.gate(node), place }
+    }
+
     /// Where each cable from the list does its work (Side). The engine can only touch the sound it carries
     /// itself: its way into the cable is taken unless an app or "System" plays into the cable, then its
     /// way out of it. What the system carries between the cable and such a node on the other side
@@ -388,6 +421,9 @@ impl<'a> Compiler<'a> {
                 }
                 if self.gate(node) != NO_GATE {
                     self.issue(&ids, &links, tr!("issue_cable_gate_direct"));
+                }
+                if self.place(node).is_some() {
+                    self.issue(&ids, &links, tr!("issue_cable_place_direct"));
                 }
             }
         }
@@ -513,13 +549,13 @@ impl<'a> Compiler<'a> {
             let source = self.nodes[edge.source.as_str()];
             if matches!(self.role(source), Role::Bus) {
                 if path.insert(source.id.as_str()) {
-                    let inner = out.add_stage(stage, &edge.id, &source.id, self.gain(source), self.gate(source));
+                    let inner = out.add_stage(stage, &edge.id, &source.id, self.work(source));
                     self.collect_sources(source, engine_edges, path, inner, delay + self.delay(source), out);
                     path.remove(source.id.as_str());
                 }
             } else if let Some(device) = self.source_device(source) {
                 let working_here = self.sides.get(source.id.as_str()) == Some(&Side::OutOf);
-                let stage = if working_here { out.add_stage(stage, &edge.id, &source.id, self.gain(source), self.gate(source)) } else { stage };
+                let stage = if working_here { out.add_stage(stage, &edge.id, &source.id, self.work(source)) } else { stage };
                 let held = if working_here { self.delay(source) } else { 0.0 };
                 out.sources.push(Source { device, delay: delay + held, stage });
             }
@@ -663,6 +699,7 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
         issues: Vec::new(),
         delay_limit: graph.delay_limit(),
         volume_limit: graph.volume_limit(),
+        distance_limit: graph.distance_limit(),
         sides: HashMap::new(),
     };
     let node_ids: Vec<&str> = graph.nodes.iter().map(|n| n.id.as_str()).collect();
@@ -832,7 +869,7 @@ pub fn compile(graph: &Graph, cables: &[Cable], defaults: &Defaults) -> Plan {
         let mut mix = Mix::default();
         // a cable working on its way in takes everything played into it as one sound
         let stage = if c.sides.get(node.id.as_str()) == Some(&Side::Into) {
-            mix.add_stage(0, &node.id, &node.id, c.gain(node), c.gate(node))
+            mix.add_stage(0, &node.id, &node.id, c.work(node))
         } else {
             0
         };
@@ -1043,7 +1080,7 @@ pub fn merge(plans: &[Plan]) -> Plan {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graphs::{GraphEdge, Position};
+    use crate::graphs::{GraphEdge, Place, Position};
 
     fn dev(id: &str) -> Option<DeviceRef> {
         Some(DeviceRef::Device {
@@ -1064,6 +1101,8 @@ mod tests {
             volume: 1.0,
             system_volume: None,
             gate: NO_GATE,
+            place: None,
+            space_view: None,
             delay: 0.0,
             balance: 0.0,
             pinned: Vec::new(),
@@ -1121,6 +1160,7 @@ mod tests {
             show_delay: None,
             delay_limit: 0.5,
             volume_limit: 2.0,
+            distance_limit: 10.0,
             start_on_launch: false,
             show_balance: None,
         }
@@ -1599,6 +1639,68 @@ mod tests {
         let stream = &merged.streams[0];
         assert_eq!(way(stream, &stream.sources[0]), vec![("a".to_string(), -10.0)]);
         assert_eq!(way(stream, &stream.sources[1]), vec![("b".to_string(), -20.0)]);
+    }
+
+    fn placed(node: GraphNode, x: f32, y: f32, z: f32) -> GraphNode {
+        GraphNode { place: Some(Place { x, y, z }), ..node }
+    }
+
+    /// The cable's stage in the plan of a microphone through a cable into headphones
+    fn stage_of(cable: GraphNode, limit: f32) -> Stage {
+        let mut g = graph(vec![input("mic", dev("mic")), cable, output("hp", dev("hp"))], &[("mic", "c"), ("c", "hp")]);
+        g.distance_limit = limit;
+        let plan = compile(&g, &[], &defaults());
+        plan.streams[0].stages[1].clone()
+    }
+
+    #[test]
+    fn a_cable_plays_from_its_place() {
+        let stage = stage_of(placed(cable_node("c", None), 0.0, -2.0, 0.0), 10.0);
+        assert_eq!(stage.place, Some([0.0, -2.0, 0.0]));
+        // twice as far as a metre is half as loud
+        assert_eq!(stage.gain, [0.5; 2]);
+    }
+
+    #[test]
+    fn distance_goes_along_with_volume_and_balance() {
+        let cable = GraphNode { volume: 0.5, balance: 1.0, ..placed(cable_node("c", None), 0.0, 4.0, 0.0) };
+        assert_eq!(stage_of(cable, 10.0).gain, [0.0, 0.125]);
+    }
+
+    #[test]
+    fn a_lowered_distance_limit_pulls_a_place_in() {
+        let stage = stage_of(placed(cable_node("c", None), 0.0, 6.0, 8.0), 5.0);
+        assert_eq!(stage.place, Some([0.0, 3.0, 4.0]));
+        assert_eq!(stage.gain, [0.2; 2]);
+    }
+
+    #[test]
+    fn a_cable_without_a_place_stays_as_it_is() {
+        let stage = stage_of(cable_node("c", None), 10.0);
+        assert_eq!((stage.place, stage.gain), (None, [1.0; 2]));
+        // the middle isn't anywhere, and a broken file isn't either
+        assert_eq!(stage_of(placed(cable_node("c", None), 0.0, 0.0, 0.0), 10.0).place, None);
+        assert_eq!(stage_of(placed(cable_node("c", None), f32::NAN, 1.0, 0.0), 10.0).place, None);
+    }
+
+    #[test]
+    fn only_cables_have_a_place() {
+        let g = graph(vec![placed(input("mic", dev("mic")), 1.0, 0.0, 0.0), placed(output("hp", dev("hp")), 1.0, 0.0, 0.0)], &[("mic", "hp")]);
+        let plan = compile(&g, &[], &defaults());
+        assert!(plan.streams[0].stages.iter().all(|s| s.place.is_none()));
+    }
+
+    #[test]
+    fn a_place_cant_act_on_what_only_the_system_carries() {
+        let (g, cables) = (
+            graph(
+                vec![system("s"), placed(cable_node("c", Some("c")), 1.0, 0.0, 0.0), app("a", "a.exe")],
+                &[("s", "c"), ("c", "a")],
+            ),
+            vec![cable("c", "c-in", "c-out")],
+        );
+        let issues = compile(&g, &cables, &defaults()).issues;
+        assert!(issues.iter().any(|i| i.message == tr!("issue_cable_place_direct")), "{issues:?}");
     }
 
     #[test]

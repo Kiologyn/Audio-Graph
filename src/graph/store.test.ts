@@ -23,6 +23,8 @@ const doc = (patch: Partial<GraphDoc> = {}): GraphDoc => ({
       delay: 0,
       balance: 0,
       gate: -100,
+      place: null,
+      spaceView: null,
       pinned: [],
       position: { x: 0, y: 0 },
     },
@@ -30,6 +32,7 @@ const doc = (patch: Partial<GraphDoc> = {}): GraphDoc => ({
   edges: [],
   delayLimit: 0.5,
   volumeLimit: 2,
+  distanceLimit: 1,
   startOnLaunch: false,
   ...patch,
 });
@@ -139,7 +142,64 @@ describe("graph editing", () => {
   });
 
   it("reads the options of old files as they were", () => {
-    graph().loadDoc({ ...doc(), delayLimit: undefined, volumeLimit: undefined, startOnLaunch: undefined } as unknown as GraphDoc);
-    expect(graph().meta).toMatchObject({ delayLimit: 0.5, volumeLimit: 2, startOnLaunch: false });
+    graph().loadDoc({ ...doc(), delayLimit: undefined, volumeLimit: undefined, distanceLimit: undefined, startOnLaunch: undefined } as unknown as GraphDoc);
+    expect(graph().meta).toMatchObject({ delayLimit: 0.5, volumeLimit: 2, distanceLimit: 1, startOnLaunch: false });
+  });
+
+  describe("a place in space", () => {
+    const at = (x: number) => ({ x, y: 0, z: 0 });
+    const place = () => graph().nodes[0].data.place;
+    const drag = (...xs: number[]) => xs.forEach((x, i) => graph().setPlace("o", at(x), i > 0));
+
+    it("a drag is one undo step, however long it takes", () => {
+      graph().loadDoc(doc());
+      drag(1, 2, 3, 4);
+      expect(place()).toEqual(at(4));
+      graph().undo();
+      expect(place()).toBeNull();
+      graph().redo();
+      expect(place()).toEqual(at(4));
+    });
+
+    it("two drags in a row are two steps", () => {
+      graph().loadDoc(doc());
+      drag(1, 2);
+      drag(3, 4);
+      graph().undo();
+      expect(place()).toEqual(at(2));
+      graph().undo();
+      expect(place()).toBeNull();
+    });
+
+    it("turning it off is a step of its own", () => {
+      graph().loadDoc(doc());
+      drag(1, 2);
+      graph().setPlace("o", null);
+      expect(place()).toBeNull();
+      graph().undo();
+      expect(place()).toEqual(at(2));
+    });
+
+    it("undo leaves how it is looked at alone", () => {
+      graph().loadDoc(doc());
+      drag(1);
+      const view = { solid: true, yaw: 1, pitch: 0.5 };
+      graph().setSpaceView("o", view);
+      graph().undo();
+      expect(place()).toBeNull();
+      expect(graph().nodes[0].data.spaceView).toEqual(view);
+      graph().redo();
+      expect(place()).toEqual(at(1));
+      expect(graph().nodes[0].data.spaceView).toEqual(view);
+    });
+
+    it("looking at it isn't a step", () => {
+      graph().loadDoc(doc());
+      drag(1);
+      graph().setSpaceView("o", { solid: true, yaw: 1, pitch: 0.5 });
+      graph().setSpaceView("o", { solid: false, yaw: 1, pitch: 0.5 });
+      graph().undo();
+      expect(place()).toBeNull();
+    });
   });
 });

@@ -152,6 +152,7 @@ pub fn run() {
             engine::engine_volume,
             engine::engine_balance,
             engine::engine_gate,
+            engine::engine_place,
             engine::engine_levels,
             engine::engine_quiet,
             system_volume::system_volumes,

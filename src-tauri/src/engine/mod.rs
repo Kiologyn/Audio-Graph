@@ -14,6 +14,7 @@ mod mixer;
 pub(crate) mod plan;
 #[cfg(any(windows, target_os = "linux"))]
 mod ring;
+mod spatial;
 #[cfg(any(windows, target_os = "linux"))]
 mod streams;
 #[cfg(windows)]
@@ -23,7 +24,7 @@ pub(crate) use win::probe;
 
 use crate::cables::Cable;
 use crate::devices::{AudioDevice, Flow};
-use crate::graphs::{DeviceRef, Graph, GraphStore, NodeKind};
+use crate::graphs::{DeviceRef, Graph, GraphStore, NodeKind, Place};
 use crate::settings::Settings;
 use crate::storage::CmdResult;
 use crate::system_volume::VolumeMemory;
@@ -146,6 +147,8 @@ enum Msg {
     Balance { graph: String, node: String, balance: f32 },
     /// A noise gate slider is moving, the same way
     Gate { graph: String, node: String, gate: f32 },
+    /// A source is moving in space, the same way
+    Place { graph: String, node: String, place: Option<Place> },
     /// Settings changed: message and tray language, turning cables off
     Settings { disable_idle_cables: bool },
     /// A device was plugged in, unplugged, turned on or off: reconnect at once
@@ -364,6 +367,13 @@ fn supervise(
                             running.retain(|r| r.id != o.id);
                         } else {
                             running.push(o.clone());
+                        }
+                    }
+                }
+                Msg::Place { graph, node, place } => {
+                    for g in running.iter_mut().chain(opened.as_mut()).filter(|g| g.id == graph) {
+                        if let Some(n) = g.nodes.iter_mut().find(|n| n.id == node) {
+                            n.place = place;
                         }
                     }
                 }
@@ -590,6 +600,11 @@ pub fn engine_gate(engine: State<Engine>, graph: String, node: String, gate: f32
         node,
         gate: gate.clamp(NO_GATE, 0.0),
     });
+}
+
+#[tauri::command]
+pub fn engine_place(engine: State<Engine>, graph: String, node: String, place: Option<Place>) {
+    engine.send(Msg::Place { graph, node, place });
 }
 
 /// How loud the sound coming into each node was since the last call, for the meters: the loudest sample value

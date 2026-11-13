@@ -1,4 +1,5 @@
 import type { Edge, Node } from "@xyflow/react";
+import type { Place, SpaceView } from "./space";
 
 /**
  * Graph node kinds.
@@ -32,7 +33,7 @@ export type AppRef = {
 export type DeviceSlotName = "sink" | "source";
 
 /** A node's sliders. They are in its menu; a pinned one stays on the node too */
-export type NodeSlider = "volume" | "balance" | "delay" | "gate";
+export type NodeSlider = "volume" | "balance" | "delay" | "gate" | "place";
 
 export type AudioNodeData = {
   kind: AudioNodeKind;
@@ -55,6 +56,10 @@ export type AudioNodeData = {
   balance: number;
   /** A cable's noise gate in dB: quieter sound is muted; NO_GATE lets everything through */
   gate: number;
+  /** A cable's place in space; null leaves its sound as it is */
+  place: Place | null;
+  /** How the place is looked at on the node */
+  spaceView: SpaceView | null;
   /** The sliders that stay on the node */
   pinned: NodeSlider[];
 };
@@ -105,6 +110,8 @@ type KindMeta = {
   balance?: boolean;
   /** The node has a noise gate */
   gate?: boolean;
+  /** The node has a place in space */
+  place?: boolean;
 };
 
 export const NODE_KINDS: Record<AudioNodeKind, KindMeta> = {
@@ -147,6 +154,7 @@ export const NODE_KINDS: Record<AudioNodeKind, KindMeta> = {
     balance: true,
     delay: "hold",
     gate: true,
+    place: true,
   },
   system: {
     title: "node_system",
@@ -159,9 +167,9 @@ export const NODE_KINDS: Record<AudioNodeKind, KindMeta> = {
 
 /** The sliders of a node kind, in the order they are shown */
 export function nodeSliders(kind: AudioNodeKind): NodeSlider[] {
-  const { maxVolume, balance, delay, gate } = NODE_KINDS[kind];
-  const has = { volume: maxVolume, balance, delay, gate };
-  return (["volume", "balance", "delay", "gate"] as const).filter((slider) => has[slider]);
+  const { maxVolume, balance, delay, gate, place } = NODE_KINDS[kind];
+  const has = { volume: maxVolume, balance, delay, gate, place };
+  return (["volume", "balance", "delay", "gate", "place"] as const).filter((slider) => has[slider]);
 }
 
 /** The order in the add menu: the devices, what connects them, then what the system runs */

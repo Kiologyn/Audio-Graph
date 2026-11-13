@@ -27,6 +27,7 @@ Route audio by drawing it. Connect microphones, headphones, apps and virtual cab
 - **Each app on its own device:** the game in the headphones, the music on the speakers.
 - **Devices in sync:** delay speakers to match Bluetooth headphones, measured automatically with a microphone.
 - **Less background noise:** a noise gate mutes everything quieter than a threshold you set.
+- **Sound around you:** put a cable's sound anywhere around your head in headphones.
 - **Hearing yourself:** send the microphone to your headphones.
 
 ## Quick start
@@ -69,7 +70,7 @@ On Linux there is nothing to install: the graph creates its cables itself while 
 | **Input** | a microphone | volume |
 | **Output** | headphones, speakers; its arrow out carries everything playing on the device | volume, delay |
 | **App** | one program | volume |
-| **Cable** | mixes everything that comes in and passes it on | volume, balance, delay, noise gate |
+| **Cable** | mixes everything that comes in and passes it on | volume, balance, delay, noise gate, 3D sound |
 | **System** | the system's default devices | |
 
 The arrow in a node's corner opens its settings, and a checked one stays visible on the node.
@@ -80,6 +81,7 @@ Sound works as with wires and a mixer: every node processes what reaches it. Cab
 
 **Sound**
 - Noise gate on cables, with a level meter on its slider
+- 3D sound on cables, for headphones: drag a point on a circle, or on a sphere you can turn, with arrows for its distance and direction
 - Delays up to 10 minutes, and automatic calibration of outputs
 - Cable volume up to 1000%, balance
 - Volume of devices and apps is the system's own slider, in step with it while the graph runs
@@ -107,6 +109,7 @@ Sound works as with wires and a mixer: every node processes what reaches it. Cab
 - **Sound the system carries skips Audio Graph.** With an app or the System node connected straight to an output, delay doesn't apply. Put a cable between them; the node tells you when this happens.
 - **On Windows an app can't listen to an output device.** Put a cable between them.
 - **On Linux a cable is a real device while the graph runs,** so other programs can use it too.
+- **3D sound is made for headphones,** and it turns a cable's sound into mono. Balance acts after it, on the result.
 - **Your data** is in `%APPDATA%\dev.audiograph.app` on Windows and `~/.local/share/dev.audiograph.app` on Linux.
 
 ## Requirements
@@ -128,3 +131,7 @@ Sound works as with wires and a mixer: every node processes what reaches it. Cab
 | Build the Linux version in WSL | `scripts\windows\build-linux.bat` | |
 
 *setup* covers Debian/Ubuntu, Fedora and Arch. On other distributions, install [Node.js](https://nodejs.org/) 22+, [Rust](https://rustup.rs/), the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) and libpulse by hand.
+
+## Credits
+
+3D sound uses head-related filters from the [SADIE II database](https://www.york.ac.uk/sadie-project/database.html), University of York, under the Apache License 2.0: see [src-tauri/hrtf](src-tauri/hrtf).

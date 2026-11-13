@@ -18,6 +18,8 @@ const docNode = (id: string, patch: Partial<DocNode>): DocNode => ({
   delay: 0,
   balance: 0,
   gate: -100,
+  place: null,
+  spaceView: null,
   pinned: [],
   position: { x: 0, y: 0 },
   ...patch,

@@ -1295,6 +1295,176 @@ button {
   margin-top: 4px;
 }
 
+.ag-space {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  user-select: none;
+}
+
+.ag-space svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.ag-space.is-solid svg {
+  cursor: grab;
+}
+
+.ag-space.is-solid svg:active {
+  cursor: grabbing;
+}
+
+.ag-space__ball {
+  fill: var(--ag-surface-2);
+  fill-opacity: 0.45;
+  stroke: var(--ag-border);
+  stroke-width: 1;
+}
+
+.ag-space__light {
+  stop-color: var(--ag-surface-2);
+}
+
+.ag-space__shade {
+  stop-color: var(--ag-surface);
+}
+
+.ag-space__axis {
+  fill: none;
+  stroke: var(--ag-text);
+  stroke-width: 0.75;
+  pointer-events: none;
+}
+
+.ag-space__front {
+  fill: var(--ag-text-dim);
+  pointer-events: none;
+}
+
+.ag-space__listener {
+  fill: var(--ag-text-dim);
+}
+
+.ag-space__stem {
+  stroke: var(--accent);
+  stroke-width: 0.75;
+  stroke-dasharray: 2 2;
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.ag-space__source {
+  fill: var(--ag-surface);
+  stroke: var(--accent);
+  stroke-width: 2;
+  pointer-events: none;
+}
+
+.ag-space__source.is-on {
+  fill: var(--accent);
+}
+
+.ag-space__grip {
+  fill: transparent;
+  cursor: pointer;
+}
+
+.ag-space__arrow {
+  cursor: pointer;
+}
+
+.ag-space .is-distance { --axis: var(--ag-output); }
+.ag-space .is-parallel { --axis: var(--ag-danger); }
+.ag-space .is-meridian { --axis: var(--ag-input); }
+
+.ag-space__arrow:hover,
+.ag-space__arrow.is-held {
+  filter: brightness(1.35);
+}
+
+.ag-space__arrow polygon {
+  fill: var(--axis);
+  stroke: var(--axis);
+  stroke-width: 0.2;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
+.ag-space__shaft {
+  stroke: var(--axis);
+  stroke-width: 0.8;
+  stroke-linecap: round;
+  pointer-events: none;
+}
+
+.ag-space__ring {
+  fill: none;
+  stroke: var(--axis);
+  stroke-width: 0.75;
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.ag-space__reach {
+  fill: transparent;
+  stroke: transparent;
+  stroke-linecap: round;
+  cursor: pointer;
+}
+
+line.ag-space__reach {
+  pointer-events: stroke;
+}
+
+.ag-space__modes {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+  overflow: hidden;
+  border: 1px solid var(--ag-border);
+  border-radius: 4px;
+}
+
+.ag-space__modes button {
+  padding: 0 4px;
+  border: none;
+  background: none;
+  color: var(--ag-text-dim);
+  font: inherit;
+  font-size: 10px;
+  line-height: 15px;
+  cursor: pointer;
+}
+
+.ag-space__modes button:hover {
+  background: var(--ag-hover);
+}
+
+.ag-space__modes button.is-on {
+  background: var(--ag-surface-2);
+  color: var(--accent);
+}
+
+.ag-space__values {
+  position: absolute;
+  display: flex;
+  gap: 5px;
+  pointer-events: none;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-shadow: 0 0 2px var(--ag-surface), 0 0 2px var(--ag-surface), 0 0 4px var(--ag-surface);
+}
+
+.ag-space__value {
+  color: var(--accent);
+  cursor: text;
+  pointer-events: auto;
+}
+
 .ag-node__label {
   margin-top: 3px;
   font-size: 14px;

@@ -16,6 +16,8 @@ const docNode = (patch: Partial<DocNode>): DocNode => ({
   delay: 0,
   balance: 0,
   gate: -100,
+  place: null,
+  spaceView: null,
   pinned: [],
   position: { x: 1, y: 2 },
   ...patch,
@@ -45,6 +47,16 @@ describe("graph file", () => {
     expect(system).toMatchObject({ volume: 1, cable: null, pinned: [] });
   });
 
+  it("keeps a cable's place and how it is looked at, and nobody else has them", () => {
+    const place = { x: 1, y: 2, z: 3 };
+    const spaceView = { solid: true, yaw: 1, pitch: 0.5 };
+    const [cable, output] = nodesToDoc(
+      nodesFromDoc([docNode({ id: "c", kind: "cable", place, spaceView, pinned: ["place"] }), docNode({ id: "o", place, spaceView, pinned: ["place" as never] })]),
+    );
+    expect(cable).toMatchObject({ place, spaceView, pinned: ["place"] });
+    expect(output).toMatchObject({ place: null, spaceView: null, pinned: [] });
+  });
+
   it("drops the delay inputs had in earlier versions", () => {
     const [input] = nodesToDoc(nodesFromDoc([docNode({ id: "i", kind: "input", delay: -0.3, pinned: ["volume", "delay"] })]));
     expect(input).toMatchObject({ delay: 0, pinned: ["volume"] });
@@ -65,6 +77,8 @@ describe("graph file", () => {
       delay: 0,
       balance: 0,
       gate: -100,
+      place: null,
+      spaceView: null,
       pinned: [],
     });
   });

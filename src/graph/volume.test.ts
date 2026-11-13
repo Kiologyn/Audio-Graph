@@ -6,7 +6,7 @@ const node = (id: string, kind: AudioNodeKind, volume = 1): AudioNode => ({
   id,
   type: "audio",
   position: { x: 0, y: 0 },
-  data: { kind, label: id, sink: null, source: null, cable: null, app: null, volume, systemVolume: null, delay: 0, balance: 0, gate: -100, pinned: [] },
+  data: { kind, label: id, sink: null, source: null, cable: null, app: null, volume, systemVolume: null, delay: 0, balance: 0, gate: -100, place: null, spaceView: null, pinned: [] },
 });
 const links = (...pairs: [string, string][]): AudioEdge[] => pairs.map(([source, target]) => ({ id: `${source}-${target}`, source, target }));
 
@@ -20,6 +20,14 @@ describe("the real volume of an output", () => {
   it("multiplies the system's sliders and the cables on the way", () => {
     const nodes = [node("mic", "input"), node("c", "cable", 1.5), node("o", "output")];
     expect(totalVolume("o", nodes, links(["mic", "c"], ["c", "o"]), 2, { mic: 0.5, o: 0.8 })).toBe("60%");
+  });
+
+  it("counts how far a cable is in space, up to the graph's distance", () => {
+    const far = node("c", "cable");
+    far.data.place = { x: 0, y: 4, z: 0 };
+    const nodes = [node("mic", "input"), far, node("o", "output")];
+    expect(totalVolume("o", nodes, links(["mic", "c"], ["c", "o"]), 2, { o: 1 }, 10)).toBe("25%");
+    expect(totalVolume("o", nodes, links(["mic", "c"], ["c", "o"]), 2, { o: 1 }, 2)).toBe("50%");
   });
 
   it("gives a range for paths of different volumes", () => {

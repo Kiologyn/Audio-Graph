@@ -1,5 +1,5 @@
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import { memo, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useT } from "../i18n";
 import { dynamicCables, virtualDeviceName } from "../platform";
 import { useSettings } from "../settings";
@@ -12,7 +12,10 @@ import { useEngine } from "./engine";
 import { Icon, KindIcon } from "./icons";
 import { nextMeter, toDb, watchLevel, type Meter } from "./levels";
 import { Popover } from "./Popover";
+import { PlaceControl } from "./PlaceControl";
 import { nodeNotes } from "./problems";
+import { SliderValue, useLiveSend } from "./SliderValue";
+import { DEFAULT_DISTANCE_LIMIT } from "./space";
 import { useGraph } from "./store";
 import { useSystemVolumes } from "./systemVolume";
 import { NODE_KINDS, NO_GATE, nodeSliders, type AudioNode, type NodeSlider } from "./types";
@@ -40,97 +43,6 @@ function VirtualCable({ label }: { label: string }) {
     <div className="ag-node__virtual" title={t("virtual_cable_hint")}>
       <span>{virtualDeviceName(label)}</span>
     </div>
-  );
-}
-
-/** Sends a slider's value to the engine at most once per 50 ms: dragging fires far more events */
-function useLiveSend(send: (graphId: string, value: number) => void) {
-  const graphId = useGraph((s) => s.meta?.id);
-  const last = useRef(0);
-  const pending = useRef<number | null>(null);
-  return (value: number) => {
-    if (!graphId) return;
-    const now = () => {
-      last.current = Date.now();
-      pending.current = null;
-      send(graphId, value);
-    };
-    if (pending.current !== null) clearTimeout(pending.current);
-    const wait = 50 - (Date.now() - last.current);
-    if (wait <= 0) now();
-    else pending.current = window.setTimeout(now, wait);
-  };
-}
-
-/** Longer than this between two clicks on a value is not a double click */
-const DOUBLE_CLICK_MS = 250;
-
-/**
- * A slider's value: a click opens it for typing, a double click resets it, if it can. Enter or leaving the field
- * applies the number, Escape cancels. draft is what the field starts with; a unit or a sign may be typed along
- */
-function SliderValue({
-  className,
-  draft,
-  onChange,
-  onReset,
-  children,
-}: {
-  className: string;
-  draft: string;
-  onChange: (value: number) => void;
-  onReset?: () => void;
-  children: ReactNode;
-}) {
-  const [text, setText] = useState<string | null>(null);
-  const click = useRef<number | null>(null);
-  useEffect(() => () => void (click.current !== null && clearTimeout(click.current)), []);
-  const commit = () => {
-    const digits = (text ?? "").replace(",", ".").replace(/[^\d.+-]/g, "");
-    const value = Number(digits);
-    setText(null);
-    if (digits !== "" && Number.isFinite(value)) onChange(value);
-  };
-  if (text !== null) {
-    return (
-      <span className={className}>
-        <input
-          className="ag-slider-value nodrag"
-          autoFocus
-          value={text}
-          onFocus={(e) => e.currentTarget.select()}
-          onChange={(e) => setText(e.currentTarget.value)}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") commit();
-            if (e.key === "Escape") {
-              // Escape cancels the typing instead of closing the menu
-              e.stopPropagation();
-              setText(null);
-            }
-          }}
-        />
-      </span>
-    );
-  }
-  return (
-    <span
-      className={className}
-      onClick={() => {
-        if (click.current !== null) return;
-        click.current = window.setTimeout(() => {
-          click.current = null;
-          setText(draft);
-        }, DOUBLE_CLICK_MS);
-      }}
-      onDoubleClick={() => {
-        if (click.current !== null) clearTimeout(click.current);
-        click.current = null;
-        onReset?.();
-      }}
-    >
-      {children}
-    </span>
   );
 }
 
@@ -196,7 +108,7 @@ function VolumeBar({
 /** A cable's volume: the engine applies it */
 function CableVolume({ id, value, max }: { id: string; value: number; max: number }) {
   const setVolume = useGraph((s) => s.setVolume);
-  const send = useLiveSend((graphId, volume) => useEngine.getState().volume(graphId, id, volume));
+  const send = useLiveSend<number>((graphId, volume) => useEngine.getState().volume(graphId, id, volume));
   const t = useT();
   const change = (volume: number) => {
     setVolume(id, volume);
@@ -213,11 +125,13 @@ function CableVolume({ id, value, max }: { id: string; value: number; max: numbe
 function SystemVolume({ id, data }: { id: string; data: AudioNode["data"] }) {
   const live = useSystemVolumes((s) => s.volumes[id] ?? null);
   const volumes = useSystemVolumes((s) => s.volumes);
-  const total = useGraph((s) => (data.kind === "output" ? totalVolume(id, s.nodes, s.edges, s.meta?.volumeLimit ?? 2, volumes) : null));
+  const total = useGraph((s) =>
+    data.kind === "output" ? totalVolume(id, s.nodes, s.edges, s.meta?.volumeLimit ?? 2, volumes, s.meta?.distanceLimit) : null,
+  );
   const graphId = useGraph((s) => s.meta?.id);
   const running = useEngine((s) => !!graphId && s.status.running.includes(graphId));
   const setSystemVolume = useGraph((s) => s.setSystemVolume);
-  const send = useLiveSend((graph, volume) => useEngine.getState().volume(graph, id, volume));
+  const send = useLiveSend<number>((graph, volume) => useEngine.getState().volume(graph, id, volume));
   const t = useT();
   const set = data.systemVolume ?? null;
   const value = running ? (live ?? set) : (set ?? live);
@@ -235,7 +149,7 @@ function SystemVolume({ id, data }: { id: string; data: AudioNode["data"] }) {
 /** A node's left-right balance: the middle is even, the fill goes from it to the knob. Double-clicking the value centers it */
 function BalanceSlider({ id, value }: { id: string; value: number }) {
   const setBalance = useGraph((s) => s.setBalance);
-  const send = useLiveSend((graphId, balance) => useEngine.getState().balance(graphId, id, balance));
+  const send = useLiveSend<number>((graphId, balance) => useEngine.getState().balance(graphId, id, balance));
   const t = useT();
   const change = (balance: number) => {
     setBalance(id, balance);
@@ -371,7 +285,7 @@ function useGateMeter(id: string, threshold: number, active: boolean) {
  */
 function GateSlider({ id, value }: { id: string; value: number }) {
   const setGate = useGraph((s) => s.setGate);
-  const send = useLiveSend((graphId, gate) => useEngine.getState().gate(graphId, id, gate));
+  const send = useLiveSend<number>((graphId, gate) => useEngine.getState().gate(graphId, id, gate));
   const graphId = useGraph((s) => s.meta?.id);
   const running = useEngine((s) => !!graphId && s.status.running.includes(graphId));
   const t = useT();
@@ -408,6 +322,7 @@ const SLIDER_NAMES: Record<NodeSlider, string> = {
   balance: "node_option_balance",
   delay: "node_option_delay",
   gate: "node_option_gate",
+  place: "node_option_place",
 };
 
 /** One of the sliders shown on a node */
@@ -415,12 +330,14 @@ function SliderOf({ id, data, slider }: { id: string; data: AudioNode["data"]; s
   const meta = NODE_KINDS[data.kind];
   const delayLimit = useGraph((s) => s.meta?.delayLimit ?? 0.5);
   const volumeLimit = useGraph((s) => s.meta?.volumeLimit ?? 2);
+  const distanceLimit = useGraph((s) => s.meta?.distanceLimit ?? DEFAULT_DISTANCE_LIMIT);
   if (slider === "volume") {
     if (meta.systemVolume) return <SystemVolume id={id} data={data} />;
     return <CableVolume id={id} value={data.volume ?? 1} max={Math.min(meta.maxVolume ?? 1, volumeLimit)} />;
   }
   if (slider === "balance") return <BalanceSlider id={id} value={data.balance ?? 0} />;
   if (slider === "gate") return <GateSlider id={id} value={data.gate ?? NO_GATE} />;
+  if (slider === "place") return <PlaceControl id={id} place={data.place ?? null} view={data.spaceView ?? null} limit={distanceLimit} />;
   return <DelaySlider id={id} value={data.delay ?? 0} limit={delayLimit} hold={meta.delay === "hold"} />;
 }
 
@@ -558,7 +475,7 @@ function AudioNodeView({ id, data, selected }: NodeProps<AudioNode>) {
         .filter((slider) => data.pinned.includes(slider))
         .map((slider) => (
           <div key={slider} className="ag-node__slider">
-            <span>{t(SLIDER_NAMES[slider])}</span>
+            {slider !== "place" && <span>{t(SLIDER_NAMES[slider])}</span>}
             <SliderOf id={id} data={data} slider={slider} />
           </div>
         ))}

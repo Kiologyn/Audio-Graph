@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { create } from "zustand";
 import { useDevices } from "./devices";
 import { flushSave } from "./library";
+import type { Place } from "./space";
 
 /** Matches engine/mod.rs and engine/plan.rs */
 export type Issue = { nodes: string[]; edges: string[]; message: string };
@@ -45,6 +46,8 @@ type EngineState = {
   balance: (graphId: string, node: string, balance: number) => void;
   /** A cable's noise gate on the fly, the same way */
   gate: (graphId: string, node: string, gate: number) => void;
+  /** A cable's place in space on the fly, the same way */
+  place: (graphId: string, node: string, place: Place | null) => void;
 };
 
 let initOnce = false;
@@ -96,6 +99,10 @@ export const useEngine = create<EngineState>()((set, get) => ({
 
   gate: (graphId, node, gate) => {
     invoke("engine_gate", { graph: graphId, node, gate }).catch(() => {});
+  },
+
+  place: (graphId, node, place) => {
+    invoke("engine_place", { graph: graphId, node, place }).catch(() => {});
   },
 
   stop: async (graphId) => {
