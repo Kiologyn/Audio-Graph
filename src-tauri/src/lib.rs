@@ -107,6 +107,20 @@ pub fn run() {
         // without it the window goes at once and the app quits after it
         .on_window_event(|window, event| {
             let app = window.app_handle();
+            // the tray's menu goes when anything else is clicked; it is no window to keep or close
+            if window.label() == tray::MENU {
+                match event {
+                    WindowEvent::Focused(false) => {
+                        let _ = window.hide();
+                    }
+                    WindowEvent::CloseRequested { api, .. } => {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                    _ => {}
+                }
+                return;
+            }
             match event {
                 WindowEvent::CloseRequested { api, .. } => {
                     api.prevent_close();
@@ -161,6 +175,10 @@ pub fn run() {
             settings::settings_get,
             settings::settings_set,
             autostart::autostart_supported,
+            tray::tray_menu,
+            tray::tray_toggle,
+            tray::tray_menu_show,
+            tray::tray_menu_close,
             platform,
             app_quit,
         ])

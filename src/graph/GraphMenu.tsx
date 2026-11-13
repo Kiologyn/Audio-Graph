@@ -110,12 +110,17 @@ function GraphRow({
   );
 }
 
-/** The dot of a graph in the list: green means running, red means running with problems */
+/** The dot of a graph in the list */
 function RunState({ id }: { id: string }) {
   const running = useEngine((s) => s.status.running.includes(id));
   const troubled = useEngine((s) => s.status.troubled.includes(id));
+  return <RunDot running={running} troubled={troubled} />;
+}
+
+/** A graph's dot, in the list and in the tray's menu: green means running, red means running with problems */
+export function RunDot({ running, troubled }: { running: boolean; troubled: boolean }) {
   const t = useT();
-  // a stopped graph has no dot, and its name moves up to the grip
+  // a stopped graph has no dot: in the list its name moves up to the grip
   if (!running) return null;
   return (
     <span

@@ -139,8 +139,6 @@ enum Msg {
     Start(Graph),
     /// Stop a graph, None stops all
     Stop(Option<String>),
-    /// From the tray: start or stop the open graph
-    Toggle,
     /// A volume slider is moving: apply at once without waiting for autosave
     Volume { graph: String, node: String, volume: f32 },
     /// A balance slider is moving, the same way
@@ -211,12 +209,17 @@ impl Engine {
         self.send(Msg::Start(graph.clone()));
     }
 
-    pub fn toggle(&self) {
-        self.send(Msg::Toggle);
+    pub fn stop(&self, id: &str) {
+        self.send(Msg::Stop(Some(id.to_string())));
     }
 
     pub fn stop_all(&self) {
         self.send(Msg::Stop(None));
+    }
+
+    /// What the engine last reported: the running graphs, and those of them where something doesn't work
+    pub fn status(&self) -> EngineStatus {
+        self.status.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     pub fn settings_changed(&self, settings: &Settings) {
@@ -281,8 +284,8 @@ fn supervise(
     // in start order: when graphs contend for an app or the default devices, the one started first wins
     let mut running: Vec<Graph> = Vec::new();
     let mut reply = None;
-    // what the tray shows now: names of running graphs, the open graph and whether it runs, the language
-    let mut tray_shows: Option<(Vec<String>, Option<String>, bool, crate::settings::Language)> = None;
+    // what the tray shows now: the running graphs by id and name, in the language
+    let mut tray_shows: Option<(Vec<(String, String)>, crate::settings::Language)> = None;
     // cable devices of running graphs: once no graph uses them, they can be turned off
     let mut powered: BTreeSet<String> = BTreeSet::new();
     // devices were turned on or off: the window needs to reread their list
@@ -358,15 +361,6 @@ fn supervise(
                     for g in running.iter_mut().chain(opened.as_mut()).filter(|g| g.id == graph) {
                         if let Some(n) = g.nodes.iter_mut().find(|n| n.id == node) {
                             n.gate = gate;
-                        }
-                    }
-                }
-                Msg::Toggle => {
-                    if let Some(o) = &opened {
-                        if running.iter().any(|r| r.id == o.id) {
-                            running.retain(|r| r.id != o.id);
-                        } else {
-                            running.push(o.clone());
                         }
                     }
                 }
@@ -483,16 +477,12 @@ fn supervise(
         if changed || std::mem::take(&mut force_emit) {
             let _ = app.emit("engine-status", next);
         }
-        let names = (
-            running.iter().map(|g| g.name.clone()).collect::<Vec<_>>(),
-            opened.as_ref().map(|g| g.name.clone()),
-            opened_running,
-            crate::i18n::language(),
-        );
-        if tray_shows.as_ref() != Some(&names) {
+        let shows = (running.iter().map(|g| (g.id.clone(), g.name.clone())).collect::<Vec<_>>(), crate::i18n::language());
+        if tray_shows.as_ref() != Some(&shows) {
             // the tray is created after the engine and may be off: nothing to update then
-            if crate::tray::update(&app, &names.0, names.1.as_deref(), names.2) {
-                tray_shows = Some(names);
+            let names: Vec<String> = shows.0.iter().map(|(_, name)| name.clone()).collect();
+            if crate::tray::update(&app, &names) {
+                tray_shows = Some(shows);
             }
         }
 
@@ -563,7 +553,7 @@ fn log_changes(running: &[Graph], status: &EngineStatus, last_running: &mut Vec<
 
 #[tauri::command]
 pub fn engine_status(engine: State<Engine>) -> EngineStatus {
-    engine.status.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    engine.status()
 }
 
 #[tauri::command]
@@ -575,7 +565,10 @@ pub fn engine_start(engine: State<Engine>, graphs: State<GraphStore>, id: String
 /// id: the graph to stop; without it, all
 #[tauri::command]
 pub fn engine_stop(engine: State<Engine>, id: Option<String>) {
-    engine.send(Msg::Stop(id));
+    match id {
+        Some(id) => engine.stop(&id),
+        None => engine.stop_all(),
+    }
 }
 
 /// Delay calibration: silence the engine's sound for this many seconds, 0 brings it back

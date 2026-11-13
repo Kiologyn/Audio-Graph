@@ -9,7 +9,7 @@ use std::fs;
 use std::io;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 /// Graph file format version. Raised on incompatible changes.
 const FORMAT_VERSION: u32 = 1;
@@ -384,6 +384,12 @@ impl GraphStore {
         Ok(graphs)
     }
 
+    /// The graphs in the order of the list
+    pub fn graphs(&self) -> CmdResult<Vec<GraphMeta>> {
+        let _guard = self.lock.lock().map_err(err)?;
+        self.list()
+    }
+
     /// The graphs to start when the app starts with the system, in the order of the list
     pub fn launch_graphs(&self) -> CmdResult<Vec<Graph>> {
         let _guard = self.lock.lock().map_err(err)?;
@@ -394,12 +400,14 @@ impl GraphStore {
 
 /// Remembers the order of the graph list
 #[tauri::command]
-pub fn graphs_reorder(store: State<GraphStore>, ids: Vec<String>) -> CmdResult<()> {
+pub fn graphs_reorder(app: AppHandle, store: State<GraphStore>, ids: Vec<String>) -> CmdResult<()> {
     let _guard = store.lock.lock().map_err(err)?;
     let mut s = store.settings();
     s.graph_order = ids;
     let json = serde_json::to_vec_pretty(&s).map_err(err)?;
-    write_atomic(&store.settings_path, &json).map_err(err)
+    write_atomic(&store.settings_path, &json).map_err(err)?;
+    crate::tray::refresh(&app);
+    Ok(())
 }
 
 #[tauri::command]
@@ -422,6 +430,7 @@ pub fn graph_load(store: State<GraphStore>, engine: State<Engine>, id: String) -
 
 #[tauri::command]
 pub fn graph_create(
+    app: AppHandle,
     store: State<GraphStore>,
     engine: State<Engine>,
     name: String,
@@ -449,6 +458,7 @@ pub fn graph_create(
     store.write(&graph)?;
     store.set_last_opened(Some(&graph.id))?;
     engine.opened(&graph);
+    crate::tray::refresh(&app);
     Ok(graph)
 }
 
@@ -469,13 +479,14 @@ pub fn graph_save(store: State<GraphStore>, engine: State<Engine>, mut graph: Gr
 }
 
 #[tauri::command]
-pub fn graph_rename(store: State<GraphStore>, engine: State<Engine>, id: String, name: String) -> CmdResult<GraphMeta> {
+pub fn graph_rename(app: AppHandle, store: State<GraphStore>, engine: State<Engine>, id: String, name: String) -> CmdResult<GraphMeta> {
     let _guard = store.lock.lock().map_err(err)?;
     let mut graph = store.read(&id)?;
     graph.name = clean_name(&name)?;
     graph.updated_at = now_ms();
     store.write(&graph)?;
     engine.saved(&graph);
+    crate::tray::refresh(&app);
     Ok(GraphMeta::from(&graph))
 }
 
@@ -513,6 +524,7 @@ pub fn graph_export(store: State<GraphStore>, cables: State<CableStore>, id: Str
 /// Its cables join the cable list
 #[tauri::command]
 pub fn graph_import(
+    app: AppHandle,
     store: State<GraphStore>,
     cables: State<CableStore>,
     engine: State<Engine>,
@@ -537,6 +549,7 @@ pub fn graph_import(
     store.write(&graph)?;
     store.set_last_opened(Some(&graph.id))?;
     engine.opened(&graph);
+    crate::tray::refresh(&app);
     Ok(graph)
 }
 
@@ -580,7 +593,7 @@ fn renew_ids(graph: &mut Graph) {
 }
 
 #[tauri::command]
-pub fn graph_delete(store: State<GraphStore>, engine: State<Engine>, id: String) -> CmdResult<()> {
+pub fn graph_delete(app: AppHandle, store: State<GraphStore>, engine: State<Engine>, id: String) -> CmdResult<()> {
     let _guard = store.lock.lock().map_err(err)?;
     check_id(&id)?;
     fs::remove_file(store.path(&id)).map_err(err)?;
@@ -588,6 +601,7 @@ pub fn graph_delete(store: State<GraphStore>, engine: State<Engine>, id: String)
     if store.settings().last_opened.as_deref() == Some(id.as_str()) {
         store.set_last_opened(None)?;
     }
+    crate::tray::refresh(&app);
     Ok(())
 }
 

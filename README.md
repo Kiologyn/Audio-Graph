@@ -97,7 +97,7 @@ Sound works as with wires and a mixer: every node processes what reaches it. Cab
 - Unplugged devices are picked up again when they return
 
 **App**
-- Tray: graphs keep running with the window closed
+- Tray: graphs keep running with the window closed, and the first five of the list start and stop from its menu
 - Starts with the system and starts chosen graphs (installed version only)
 - Remembers the window and each graph's view
 - Light and dark themes; English, Russian, Spanish, Chinese, Japanese

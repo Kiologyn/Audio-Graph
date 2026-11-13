@@ -192,8 +192,6 @@
   "tray_stop_all": "全部停止",
   "tray_open": "打开 Audio Graph",
   "tray_quit": "退出",
-  "tray_stop_graph": "停止“{name}”",
-  "tray_start_graph": "启动“{name}”",
   "tray_tooltip_running_one": "Audio Graph — 正在运行“{name}”",
   "tray_tooltip_running_many": "Audio Graph — 正在运行 {names}",
   "error_device_control_windows_only": "启用和禁用设备目前仅在 Windows 上可用",

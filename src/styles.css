@@ -1295,6 +1295,71 @@ button {
   margin-top: 4px;
 }
 
+/* the tray's menu (Windows): a window of its own, the size of the menu */
+.ag-tray-window {
+  background: var(--ag-surface);
+}
+
+.ag-tray {
+  display: inline-flex;
+  flex-direction: column;
+  min-width: 200px;
+  max-width: 320px;
+  padding: 4px;
+  box-sizing: border-box;
+  background: var(--ag-surface);
+}
+
+.ag-tray__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 16px 0 8px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--ag-text);
+  font: inherit;
+  text-align: left;
+  cursor: default;
+}
+
+.ag-tray__item:hover:not(:disabled),
+.ag-tray__item:focus-visible {
+  background: var(--ag-hover);
+  outline: none;
+}
+
+.ag-tray__item:disabled {
+  color: var(--ag-text-dim);
+}
+
+/* the column of the graph list's dots: names stand in line whether a graph runs or not */
+.ag-tray__state {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+}
+
+.ag-tray__state .ag-graphs__state {
+  margin: 0;
+}
+
+.ag-tray__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ag-tray__line {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--ag-border);
+}
+
 .ag-space {
   position: relative;
   width: 100%;

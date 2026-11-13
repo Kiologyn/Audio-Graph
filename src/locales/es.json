@@ -192,8 +192,6 @@
   "tray_stop_all": "Detener todos",
   "tray_open": "Abrir Audio Graph",
   "tray_quit": "Salir",
-  "tray_stop_graph": "Detener «{name}»",
-  "tray_start_graph": "Iniciar «{name}»",
   "tray_tooltip_running_one": "Audio Graph — en marcha: «{name}»",
   "tray_tooltip_running_many": "Audio Graph — en marcha: {names}",
   "error_device_control_windows_only": "activar y desactivar dispositivos por ahora solo está disponible en Windows",

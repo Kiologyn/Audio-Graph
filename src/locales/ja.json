@@ -192,8 +192,6 @@
   "tray_stop_all": "すべて停止",
   "tray_open": "Audio Graph を開く",
   "tray_quit": "終了",
-  "tray_stop_graph": "「{name}」を停止",
-  "tray_start_graph": "「{name}」を開始",
   "tray_tooltip_running_one": "Audio Graph — 「{name}」を実行中",
   "tray_tooltip_running_many": "Audio Graph — {names} を実行中",
   "error_device_control_windows_only": "デバイスの有効化と無効化は、現在 Windows でのみ利用できます",

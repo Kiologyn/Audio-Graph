@@ -192,8 +192,6 @@
   "tray_stop_all": "Stop all",
   "tray_open": "Open Audio Graph",
   "tray_quit": "Quit",
-  "tray_stop_graph": "Stop “{name}”",
-  "tray_start_graph": "Start “{name}”",
   "tray_tooltip_running_one": "Audio Graph — running “{name}”",
   "tray_tooltip_running_many": "Audio Graph — running {names}",
   "error_device_control_windows_only": "turning devices on and off is only available on Windows for now",

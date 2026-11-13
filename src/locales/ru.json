@@ -192,8 +192,6 @@
   "tray_stop_all": "Остановить все",
   "tray_open": "Открыть Audio Graph",
   "tray_quit": "Выйти",
-  "tray_stop_graph": "Остановить «{name}»",
-  "tray_start_graph": "Запустить «{name}»",
   "tray_tooltip_running_one": "Audio Graph — работает «{name}»",
   "tray_tooltip_running_many": "Audio Graph — работают {names}",
   "error_device_control_windows_only": "включение и выключение устройств пока есть только на Windows",
