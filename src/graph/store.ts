@@ -12,6 +12,7 @@ import { create } from "zustand";
 import { isAnyTranslation, t } from "../i18n";
 import type { Camera } from "./camera";
 import { edgesFromDoc, nodesFromDoc, type GraphDoc, type GraphPrefs } from "./doc";
+import { DEFAULT_DISTANCE_LIMIT, type Place, type SpaceView } from "./space";
 import {
   NODE_KINDS, NO_GATE,
   type AudioEdge,
@@ -57,6 +58,10 @@ type GraphState = {
   setDelays: (delays: Record<string, number>) => void;
   setBalance: (id: string, balance: number) => void;
   setGate: (id: string, gate: number) => void;
+  /** continuing: the same drag as the last call, one undo step from start to end */
+  setPlace: (id: string, place: Place | null, continuing?: boolean) => void;
+  /** How the place is looked at isn't a graph edit: undo leaves it alone */
+  setSpaceView: (id: string, view: SpaceView) => void;
   undo: () => void;
   redo: () => void;
 };
@@ -88,7 +93,7 @@ function makeNode(kind: AudioNodeKind, position: XYPosition, label?: string): Au
     id: crypto.randomUUID(),
     type: "audio",
     position,
-    data: { kind, label: label ?? t(NODE_KINDS[kind].defaultLabel), sink: null, source: null, cable: null, app: null, volume: 1, systemVolume: null, delay: 0, balance: 0, gate: NO_GATE, pinned: [] },
+    data: { kind, label: label ?? t(NODE_KINDS[kind].defaultLabel), sink: null, source: null, cable: null, app: null, volume: 1, systemVolume: null, delay: 0, balance: 0, gate: NO_GATE, place: null, spaceView: null, pinned: [] },
   };
 }
 
@@ -161,8 +166,12 @@ export const useGraph = create<GraphState>()((set, get) => {
   const restore = (snap: Snapshot) => {
     lastKey = null;
     dragging = false;
+    const looks = new Map(get().nodes.map((n) => [n.id, n.data.spaceView]));
+    const looking = (n: AudioNode) => (looks.has(n.id) ? looks.get(n.id)! : n.data.spaceView);
     set({
-      nodes: snap.nodes.map((n) => (n.selected ? { ...n, selected: false } : n)),
+      nodes: snap.nodes
+        .map((n) => (n.selected ? { ...n, selected: false } : n))
+        .map((n) => (looking(n) === n.data.spaceView ? n : { ...n, data: { ...n.data, spaceView: looking(n) } })),
       edges: snap.edges.map((e) => (e.selected ? { ...e, selected: false } : e)),
     });
   };
@@ -182,6 +191,7 @@ export const useGraph = create<GraphState>()((set, get) => {
           createdAt: doc.createdAt,
           delayLimit: doc.delayLimit ?? 0.5,
           volumeLimit: doc.volumeLimit ?? 2,
+          distanceLimit: doc.distanceLimit ?? DEFAULT_DISTANCE_LIMIT,
           startOnLaunch: doc.startOnLaunch ?? false,
         },
         viewport: doc.viewport,
@@ -328,6 +338,19 @@ export const useGraph = create<GraphState>()((set, get) => {
       record(`gate:${id}`);
       set({
         nodes: get().nodes.map((n) => (n.id === id ? { ...n, data: { ...n.data, gate } } : n)),
+      });
+    },
+
+    setPlace: (id, place, continuing = false) => {
+      if (!continuing) record();
+      set({
+        nodes: get().nodes.map((n) => (n.id === id ? { ...n, data: { ...n.data, place } } : n)),
+      });
+    },
+
+    setSpaceView: (id, spaceView) => {
+      set({
+        nodes: get().nodes.map((n) => (n.id === id ? { ...n, data: { ...n.data, spaceView } } : n)),
       });
     },
 

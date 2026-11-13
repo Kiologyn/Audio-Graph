@@ -400,8 +400,53 @@ mod tests {
         assert!((right - left - 0.3).abs() < 0.05, "{left} {right}");
     }
 
+    /// A tone from VAC Line 1 played from the right, from the left, from the front and with no place, back into
+    /// the line: the side the sound is on comes louder, and in front it is as loud as with no place. Only the VAC
+    /// line sounds; it is turned on for the test if it is off. AG_TEST_LINE takes another line, for when a
+    /// running graph uses Line 1:
+    /// cargo test vac_placed -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn vac_placed() {
+        let _com = ComGuard::init();
+        let _defaults = crate::devices::win::KeepDefaults::new();
+        let name = format!("{} (Virtual Audio Cable", std::env::var("AG_TEST_LINE").unwrap_or_else(|_| "Line 1".into()));
+        let find = |flow: Flow| {
+            let devices = list().unwrap();
+            let device = devices.into_iter().find(|d| d.name.starts_with(&name) && d.flow == flow);
+            device.expect("no such VAC line")
+        };
+        let line = [find(Flow::Render), find(Flow::Capture)];
+        let off: Vec<String> = line.iter().filter(|d| d.state != DeviceState::Active).map(|d| d.id.clone()).collect();
+        if !off.is_empty() {
+            crate::devices::set_enabled(&off, true).unwrap();
+            std::thread::sleep(Duration::from_millis(500));
+        }
+        let tone = |place| tone_placed(&line[0].id, &line[1].id, 0.0, [1.0; 2], place).1;
+        let [right_left, right_right] = tone(Some([1.0, 0.0, 0.0]));
+        let [left_left, left_right] = tone(Some([-1.0, 0.0, 0.0]));
+        let [front_left, front_right] = tone(Some([0.0, 1.0, 0.0]));
+        let [plain_left, plain_right] = tone(None);
+        if !off.is_empty() {
+            crate::devices::set_enabled(&off, false).unwrap();
+        }
+        println!(
+            "right {right_left:.3} {right_right:.3}, left {left_left:.3} {left_right:.3}, front {front_left:.3} {front_right:.3}, no place {plain_left:.3} {plain_right:.3}"
+        );
+        assert!(right_right > right_left * 1.2, "{right_left} {right_right}");
+        assert!(left_left > left_right * 1.2, "{left_left} {left_right}");
+        assert!((plain_left / plain_right - 1.0).abs() < 0.02, "{plain_left} {plain_right}");
+        // the volume set is what is heard
+        assert!((front_left / plain_left - 1.0).abs() < 0.15 && (front_right / plain_right - 1.0).abs() < 0.15, "{front_left} {front_right}");
+    }
+
     /// Plays a tone through a link with the delay and volume; returns when it was heard and how loud per channel
     fn tone_through(render_id: &str, capture_id: &str, delay: f32, gain: Gain) -> (Duration, [f64; 2]) {
+        tone_placed(render_id, capture_id, delay, gain, None)
+    }
+
+    /// The same from a place in space
+    fn tone_placed(render_id: &str, capture_id: &str, delay: f32, gain: Gain, place: Option<[f32; 3]>) -> (Duration, [f64; 2]) {
         let mut capture = Worker::<Recipients>::new();
         let (heard_in, heard) = ring(RATE * CHANNELS);
         lock(&capture.links).push((("test".into(), 0), heard_in));
@@ -412,7 +457,9 @@ mod tests {
         reader.set_delay(delay);
         reader.stage = 1;
         let mut mixer = lock(&render.links);
-        mixer.set_stages(&Stream::through("", true, &[("", gain, 0.0)]).stages, &Levels::default());
+        let mut stages = Stream::through("", true, &[("", gain, 0.0)]).stages;
+        stages[1].place = place;
+        mixer.set_stages(&stages, &Levels::default());
         mixer.links.push((("test".into(), 0), reader));
         drop(mixer);
         render.supervise(render_id, render_thread);

@@ -1,4 +1,5 @@
 import type { Camera } from "./camera";
+import type { Place, SpaceView } from "./space";
 import {
   NODE_KINDS, NO_GATE,
   nodeSliders,
@@ -24,6 +25,8 @@ export type GraphDoc = {
   delayLimit: number;
   /** The volume sliders' maximum: 2 is 200% */
   volumeLimit: number;
+  /** How far from the listener sound can be, in metres */
+  distanceLimit: number;
   /** Start the graph when the app starts with the system */
   startOnLaunch: boolean;
 };
@@ -48,6 +51,10 @@ export type DocNode = {
   balance: number;
   /** A cable's noise gate in dB */
   gate: number;
+  /** A cable's place in space; null leaves its sound as it is */
+  place: Place | null;
+  /** How the place is looked at on the node */
+  spaceView: SpaceView | null;
   /** The sliders that stay on the node */
   pinned: NodeSlider[];
   position: { x: number; y: number };
@@ -56,7 +63,7 @@ export type DocNode = {
 export type DocEdge = { id: string; source: string; target: string };
 
 /** What the graph's options menu changes */
-export type GraphPrefs = Pick<GraphDoc, "delayLimit" | "volumeLimit" | "startOnLaunch">;
+export type GraphPrefs = Pick<GraphDoc, "delayLimit" | "volumeLimit" | "distanceLimit" | "startOnLaunch">;
 
 export type GraphMeta = Pick<GraphDoc, "id" | "name" | "createdAt" | "updatedAt"> & GraphPrefs;
 
@@ -78,6 +85,8 @@ export function nodesToDoc(nodes: AudioNode[]): DocNode[] {
       delay: meta.delay ? (n.data.delay ?? 0) : 0,
       balance: meta.balance ? (n.data.balance ?? 0) : 0,
       gate: meta.gate ? (n.data.gate ?? NO_GATE) : NO_GATE,
+      place: meta.place ? (n.data.place ?? null) : null,
+      spaceView: meta.place ? (n.data.spaceView ?? null) : null,
       pinned: nodeSliders(n.data.kind).filter((slider) => n.data.pinned?.includes(slider)),
       position: { x: n.position.x, y: n.position.y },
     };
@@ -105,6 +114,8 @@ export function nodesFromDoc(nodes: DocNode[]): AudioNode[] {
       delay: n.delay ?? 0,
       balance: n.balance ?? 0,
       gate: n.gate ?? NO_GATE,
+      place: n.place ?? null,
+      spaceView: n.spaceView ?? null,
       pinned: n.pinned ?? [],
     },
   }));

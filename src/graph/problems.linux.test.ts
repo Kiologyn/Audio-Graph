@@ -23,6 +23,8 @@ const [mix] = nodesFromDoc([
     delay: 0,
     balance: 0,
     gate: -100,
+    place: null,
+    spaceView: null,
     pinned: [],
     position: { x: 0, y: 0 },
   },

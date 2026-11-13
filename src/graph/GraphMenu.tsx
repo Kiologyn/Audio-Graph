@@ -3,6 +3,7 @@ import { useT } from "../i18n";
 import { useSettings } from "../settings";
 import { useCalibration } from "./Calibration";
 import { MAX_DELAY_LIMIT, type GraphMeta } from "./doc";
+import { DEFAULT_DISTANCE_LIMIT, MAX_DISTANCE_LIMIT } from "./space";
 import { MAX_VOLUME_LIMIT } from "./types";
 import { useEngine } from "./engine";
 import { Icon } from "./icons";
@@ -109,12 +110,17 @@ function GraphRow({
   );
 }
 
-/** The dot of a graph in the list: green means running, red means running with problems */
+/** The dot of a graph in the list */
 function RunState({ id }: { id: string }) {
   const running = useEngine((s) => s.status.running.includes(id));
   const troubled = useEngine((s) => s.status.troubled.includes(id));
+  return <RunDot running={running} troubled={troubled} />;
+}
+
+/** A graph's dot, in the list and in the tray's menu: green means running, red means running with problems */
+export function RunDot({ running, troubled }: { running: boolean; troubled: boolean }) {
   const t = useT();
-  // a stopped graph has no dot, and its name moves up to the grip
+  // a stopped graph has no dot: in the list its name moves up to the grip
   if (!running) return null;
   return (
     <span
@@ -227,6 +233,20 @@ function GraphOptions({ graph, onExport }: { graph: GraphMeta; onExport: (result
                 unit="%"
                 title={t("graph_volume_limit", { max: MAX_VOLUME_LIMIT * 100 })}
                 onChange={(percent) => setPrefs(graph.id, { volumeLimit: percent / 100 })}
+              />
+            </div>
+            <div className="ag-graph-options__row">
+              <span className="ag-graph-options__text">
+                {t("graph_distance_range")}
+                <small>{t("graph_distance_range_hint")}</small>
+              </span>
+              <LimitField
+                value={graph.distanceLimit ?? DEFAULT_DISTANCE_LIMIT}
+                max={MAX_DISTANCE_LIMIT}
+                digits={0}
+                unit={t("metres_short")}
+                title={t("graph_distance_limit", { max: MAX_DISTANCE_LIMIT })}
+                onChange={(distanceLimit) => setPrefs(graph.id, { distanceLimit })}
               />
             </div>
             <label className={`ag-graph-options__check${autostart ? "" : " is-disabled"}`}>

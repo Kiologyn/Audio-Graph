@@ -1214,6 +1214,40 @@ mod tests {
         assert!(rms < 0.001, "RMS {rms}");
     }
 
+    /// A place on a real server: the side the sound is on comes louder, it can move while it plays, in front
+    /// it is as loud as without a place, and without a place the sound is as it was
+    #[test]
+    #[ignore]
+    fn a_place_moves_the_sound() {
+        let _devices = Devices::new();
+        let (mut backend, _) = backend();
+        let plan = |place| {
+            let mut stream = PlanStream::through("agtest.out", true, &[("agtest.mic.src", [1.0; 2], 0.0)]);
+            stream.stages[1].place = place;
+            Plan { streams: vec![stream], ..Plan::default() }
+        };
+        ticks(&mut backend, &plan(Some([1.0, 0.0, 0.0])));
+        settle();
+        let [left, right] = tone_rms_channels("agtest.mic", "agtest.out.monitor");
+        println!("right: {left:.3} {right:.3}");
+        assert!(right > left * 1.2, "{left} {right}");
+        ticks(&mut backend, &plan(Some([-1.0, 0.0, 0.0])));
+        std::thread::sleep(Duration::from_millis(300));
+        let [left, right] = tone_rms_channels("agtest.mic", "agtest.out.monitor");
+        println!("left: {left:.3} {right:.3}");
+        assert!(left > right * 1.2, "{left} {right}");
+        ticks(&mut backend, &plan(Some([0.0, 1.0, 0.0])));
+        std::thread::sleep(Duration::from_millis(300));
+        let [left, right] = tone_rms_channels("agtest.mic", "agtest.out.monitor");
+        println!("front: {left:.3} {right:.3}");
+        assert!((left - 0.354).abs() < 0.06 && (right - 0.354).abs() < 0.06, "{left} {right}");
+        ticks(&mut backend, &plan(None));
+        std::thread::sleep(Duration::from_millis(300));
+        let [left, right] = tone_rms_channels("agtest.mic", "agtest.out.monitor");
+        println!("no place: {left:.3} {right:.3}");
+        assert!((left - 0.354).abs() < 0.04 && (right - 0.354).abs() < 0.04, "{left} {right}");
+    }
+
     /// The sliders of nodes are the server's: what is set is what pactl sees, and the other way round.
     /// The default device is found, what isn't there gives nothing
     #[test]

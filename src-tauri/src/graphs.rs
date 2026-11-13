@@ -9,7 +9,7 @@ use std::fs;
 use std::io;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 /// Graph file format version. Raised on incompatible changes.
 const FORMAT_VERSION: u32 = 1;
@@ -24,6 +24,10 @@ fn full_volume() -> f32 {
 
 fn no_gate() -> f32 {
     crate::engine::NO_GATE
+}
+
+fn one_metre() -> f32 {
+    1.0
 }
 
 fn half_second() -> f32 {
@@ -62,6 +66,23 @@ pub struct Viewport {
     pub width: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<f64>,
+}
+
+/// Where a sound is around the listener, in metres: x to the right, y to the front, z up
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct Place {
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+}
+
+/// How a place is looked at on the node: only the interface reads it
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct SpaceView {
+    /// A sphere that turns, otherwise a circle seen from above
+    pub solid: bool,
+    pub yaw: f32,
+    pub pitch: f32,
 }
 
 /// A node port's binding to a system device
@@ -119,7 +140,12 @@ pub struct GraphNode {
     /// A cable's noise gate in dB: quieter sound is muted, -100 lets everything through
     #[serde(default = "no_gate")]
     pub gate: f32,
-    /// The sliders that stay on the node, not only in its menu: "volume", "balance", "delay", "gate"
+    /// A cable's place in space; none leaves its sound as it is
+    #[serde(default)]
+    pub place: Option<Place>,
+    #[serde(default, rename = "spaceView")]
+    pub space_view: Option<SpaceView>,
+    /// The sliders that stay on the node, not only in its menu: "volume", "balance", "delay", "gate", "place"
     #[serde(default)]
     pub pinned: Vec<String>,
     pub position: Position,
@@ -156,6 +182,9 @@ pub struct Graph {
     /// The volume sliders' maximum: 2 is 200%. An app's slider stops at 100% anyway
     #[serde(default = "twice_as_loud")]
     pub volume_limit: f32,
+    /// How far from the listener a source can be, in metres
+    #[serde(default = "one_metre")]
+    pub distance_limit: f32,
     /// Start the graph when the app starts with the system
     #[serde(default)]
     pub start_on_launch: bool,
@@ -171,6 +200,9 @@ pub const MAX_DELAY_LIMIT: f32 = crate::engine::plan::MAX_DELAY / 2.0;
 /// The volume limit's range: from 1% to 1000%
 const VOLUME_LIMITS: (f32, f32) = (0.01, 10.0);
 
+/// The distance limit's range in metres
+const DISTANCE_LIMITS: (f32, f32) = (1.0, 1000.0);
+
 impl Graph {
     /// The delay slider range, within what the engine can do
     pub fn delay_limit(&self) -> f32 {
@@ -180,6 +212,11 @@ impl Graph {
     /// The volume sliders' maximum, within its range
     pub fn volume_limit(&self) -> f32 {
         self.volume_limit.clamp(VOLUME_LIMITS.0, VOLUME_LIMITS.1)
+    }
+
+    /// How far a source can be, within what makes sense
+    pub fn distance_limit(&self) -> f32 {
+        self.distance_limit.clamp(DISTANCE_LIMITS.0, DISTANCE_LIMITS.1)
     }
 
     /// A graph from a file of any version. Older versions could turn a graph's delays and balances
@@ -215,6 +252,7 @@ pub struct GraphMeta {
     pub updated_at: u64,
     pub delay_limit: f32,
     pub volume_limit: f32,
+    pub distance_limit: f32,
     pub start_on_launch: bool,
 }
 
@@ -227,6 +265,7 @@ impl From<&Graph> for GraphMeta {
             updated_at: g.updated_at,
             delay_limit: g.delay_limit,
             volume_limit: g.volume_limit,
+            distance_limit: g.distance_limit,
             start_on_launch: g.start_on_launch,
         }
     }
@@ -238,6 +277,7 @@ impl From<&Graph> for GraphMeta {
 pub struct GraphPrefs {
     pub delay_limit: f32,
     pub volume_limit: f32,
+    pub distance_limit: f32,
     pub start_on_launch: bool,
 }
 
@@ -344,6 +384,12 @@ impl GraphStore {
         Ok(graphs)
     }
 
+    /// The graphs in the order of the list
+    pub fn graphs(&self) -> CmdResult<Vec<GraphMeta>> {
+        let _guard = self.lock.lock().map_err(err)?;
+        self.list()
+    }
+
     /// The graphs to start when the app starts with the system, in the order of the list
     pub fn launch_graphs(&self) -> CmdResult<Vec<Graph>> {
         let _guard = self.lock.lock().map_err(err)?;
@@ -354,12 +400,14 @@ impl GraphStore {
 
 /// Remembers the order of the graph list
 #[tauri::command]
-pub fn graphs_reorder(store: State<GraphStore>, ids: Vec<String>) -> CmdResult<()> {
+pub fn graphs_reorder(app: AppHandle, store: State<GraphStore>, ids: Vec<String>) -> CmdResult<()> {
     let _guard = store.lock.lock().map_err(err)?;
     let mut s = store.settings();
     s.graph_order = ids;
     let json = serde_json::to_vec_pretty(&s).map_err(err)?;
-    write_atomic(&store.settings_path, &json).map_err(err)
+    write_atomic(&store.settings_path, &json).map_err(err)?;
+    crate::tray::refresh(&app);
+    Ok(())
 }
 
 #[tauri::command]
@@ -382,6 +430,7 @@ pub fn graph_load(store: State<GraphStore>, engine: State<Engine>, id: String) -
 
 #[tauri::command]
 pub fn graph_create(
+    app: AppHandle,
     store: State<GraphStore>,
     engine: State<Engine>,
     name: String,
@@ -402,12 +451,14 @@ pub fn graph_create(
         show_delay: None,
         delay_limit: half_second(),
         volume_limit: twice_as_loud(),
+        distance_limit: one_metre(),
         start_on_launch: false,
         show_balance: None,
     };
     store.write(&graph)?;
     store.set_last_opened(Some(&graph.id))?;
     engine.opened(&graph);
+    crate::tray::refresh(&app);
     Ok(graph)
 }
 
@@ -428,13 +479,14 @@ pub fn graph_save(store: State<GraphStore>, engine: State<Engine>, mut graph: Gr
 }
 
 #[tauri::command]
-pub fn graph_rename(store: State<GraphStore>, engine: State<Engine>, id: String, name: String) -> CmdResult<GraphMeta> {
+pub fn graph_rename(app: AppHandle, store: State<GraphStore>, engine: State<Engine>, id: String, name: String) -> CmdResult<GraphMeta> {
     let _guard = store.lock.lock().map_err(err)?;
     let mut graph = store.read(&id)?;
     graph.name = clean_name(&name)?;
     graph.updated_at = now_ms();
     store.write(&graph)?;
     engine.saved(&graph);
+    crate::tray::refresh(&app);
     Ok(GraphMeta::from(&graph))
 }
 
@@ -445,6 +497,7 @@ pub fn graph_set_prefs(store: State<GraphStore>, engine: State<Engine>, id: Stri
     let mut graph = store.read(&id)?;
     graph.delay_limit = prefs.delay_limit.clamp(0.001, MAX_DELAY_LIMIT);
     graph.volume_limit = prefs.volume_limit.clamp(VOLUME_LIMITS.0, VOLUME_LIMITS.1);
+    graph.distance_limit = prefs.distance_limit.clamp(DISTANCE_LIMITS.0, DISTANCE_LIMITS.1);
     graph.start_on_launch = prefs.start_on_launch;
     graph.updated_at = now_ms();
     store.write(&graph)?;
@@ -471,6 +524,7 @@ pub fn graph_export(store: State<GraphStore>, cables: State<CableStore>, id: Str
 /// Its cables join the cable list
 #[tauri::command]
 pub fn graph_import(
+    app: AppHandle,
     store: State<GraphStore>,
     cables: State<CableStore>,
     engine: State<Engine>,
@@ -495,6 +549,7 @@ pub fn graph_import(
     store.write(&graph)?;
     store.set_last_opened(Some(&graph.id))?;
     engine.opened(&graph);
+    crate::tray::refresh(&app);
     Ok(graph)
 }
 
@@ -538,7 +593,7 @@ fn renew_ids(graph: &mut Graph) {
 }
 
 #[tauri::command]
-pub fn graph_delete(store: State<GraphStore>, engine: State<Engine>, id: String) -> CmdResult<()> {
+pub fn graph_delete(app: AppHandle, store: State<GraphStore>, engine: State<Engine>, id: String) -> CmdResult<()> {
     let _guard = store.lock.lock().map_err(err)?;
     check_id(&id)?;
     fs::remove_file(store.path(&id)).map_err(err)?;
@@ -546,6 +601,7 @@ pub fn graph_delete(store: State<GraphStore>, engine: State<Engine>, id: String)
     if store.settings().last_opened.as_deref() == Some(id.as_str()) {
         store.set_last_opened(None)?;
     }
+    crate::tray::refresh(&app);
     Ok(())
 }
 
@@ -644,6 +700,30 @@ mod tests {
         assert_eq!(g.delay_limit(), 0.001);
         g.delay_limit = MAX_DELAY_LIMIT + 1.0;
         assert_eq!(g.delay_limit(), MAX_DELAY_LIMIT);
+    }
+
+    #[test]
+    fn distance_limit_stays_in_its_range() {
+        let text = r#"{"id":"g","name":"Old","createdAt":1,"updatedAt":1}"#;
+        let mut g: Graph = serde_json::from_str(text).unwrap();
+        assert_eq!(g.distance_limit(), 1.0);
+        g.distance_limit = 0.0;
+        assert_eq!(g.distance_limit(), 1.0);
+        g.distance_limit = 1e6;
+        assert_eq!(g.distance_limit(), 1000.0);
+    }
+
+    /// A place and how it is looked at survive saving, and old files have neither
+    #[test]
+    fn a_place_is_kept_in_the_file() {
+        let text = r#"{"id":"c","kind":"cable","label":"c","position":{"x":0,"y":0},"place":{"x":1.5,"y":-2,"z":0.5},"spaceView":{"solid":true,"yaw":0.25,"pitch":-1}}"#;
+        let node: GraphNode = serde_json::from_str(text).unwrap();
+        assert_eq!(node.place, Some(Place { x: 1.5, y: -2.0, z: 0.5 }));
+        assert_eq!(node.space_view, Some(SpaceView { solid: true, yaw: 0.25, pitch: -1.0 }));
+        let again: GraphNode = serde_json::from_str(&serde_json::to_string(&node).unwrap()).unwrap();
+        assert_eq!((again.place, again.space_view), (node.place, node.space_view));
+        let old: GraphNode = serde_json::from_str(r#"{"id":"c","kind":"cable","label":"c","position":{"x":0,"y":0}}"#).unwrap();
+        assert_eq!((old.place, old.space_view), (None, None));
     }
 
     #[test]

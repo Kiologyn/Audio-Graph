@@ -1,11 +1,13 @@
 //! What an output device plays: its links go into stages as the plan says, each stage sums what
-//! comes to it, its noise gate listens to that sum, and it passes the sound on with its volume.
+//! comes to it, its noise gate listens to that sum, and it passes the sound on with its volume
+//! from its place in space.
 //! Everything runs in the device's stream, so nothing waits for other threads. A node on the way
 //! to two devices has a stage in each: both hear the same sound and decide the same.
 
 use super::levels::{Level, Levels};
 use super::link::{LinkReader, CHANNELS, RATE};
 use super::plan::{Gain, Stage, NO_GATE};
+use super::spatial::Spatial;
 use super::streams::Peer;
 use std::sync::Arc;
 
@@ -54,6 +56,9 @@ struct Running {
     /// The volume at the end of the last packet, the gate included: the next one goes on from it
     played: Gain,
     gate: Gate,
+    /// Only while the stage has a place in space, or is still leaving it
+    spatial: Option<Box<Spatial>>,
+    place: Option<[f32; 3]>,
     level: Option<Arc<Level>>,
 }
 
@@ -66,7 +71,19 @@ impl Running {
             gain,
             played: gain,
             gate: Gate { level: 0.0, open: 1.0, hold: 0 },
+            spatial: None,
+            place: None,
             level: None,
+        }
+    }
+
+    fn set_place(&mut self, place: Option<[f32; 3]>) {
+        if place == self.place {
+            return;
+        }
+        self.place = place;
+        if place.is_some() || self.spatial.is_some() {
+            self.spatial.get_or_insert_with(Default::default).set(place);
         }
     }
 
@@ -78,6 +95,12 @@ impl Running {
         }
         let frames = self.sound.len() / CHANNELS;
         let open = self.gate.after(peak, frames);
+        if let Some(spatial) = &mut self.spatial {
+            spatial.process(&mut self.sound);
+            if spatial.idle() {
+                self.spatial = None;
+            }
+        }
         let (from, to) = (self.played, self.gain.map(|g| g * open));
         self.played = to;
         if from == to {
@@ -122,6 +145,7 @@ impl Mixer {
                 running.parent = stage.parent;
                 running.gain = stage.gain;
                 running.gate.set(stage.gate);
+                running.set_place(stage.place);
                 running.level = (!stage.node.is_empty()).then(|| levels.of(&stage.node));
                 running
             })
@@ -160,7 +184,7 @@ mod tests {
     const PACKET: usize = 480;
 
     fn stage(id: &str, node: &str, parent: usize, gain: Gain, gate: f32) -> Stage {
-        Stage { id: id.into(), node: node.into(), parent, gain, gate }
+        Stage { id: id.into(), node: node.into(), parent, gain, gate, place: None }
     }
 
     /// A mixer with these stages after the device's own, and a link into each of the given stages
@@ -329,6 +353,55 @@ mod tests {
         links[0].push(&vec![0.5; PACKET * CHANNELS]);
         mixer.play(&mut out);
         assert!(out.iter().all(|&s| (s - 0.25).abs() < 1e-6));
+    }
+
+    /// The two channels' loudest values while a steady sound goes through a stage with this place
+    fn placed(place: Option<[f32; 3]>, gain: Gain) -> Gain {
+        let (mut mixer, links, _) = mixer(&[Stage { place, ..stage("/g", "g", 0, gain, NO_GATE) }], &[1]);
+        run(&mut mixer, &links, &[0.25], 4)
+    }
+
+    #[test]
+    fn a_place_puts_the_sound_on_its_side() {
+        // a head shades only sounds that change: a 2 kHz square wave
+        let place = Some([1.0, 0.0, 0.0]);
+        let (mut mixer, links, _) = mixer(&[Stage { place, ..stage("/g", "g", 0, [1.0; 2], NO_GATE) }], &[1]);
+        let wave: Vec<f32> = (0..PACKET * CHANNELS).map(|i| if (i / CHANNELS / 12) % 2 == 0 { 0.25 } else { -0.25 }).collect();
+        let mut out = vec![0.0f32; PACKET * CHANNELS];
+        for _ in 0..4 {
+            links[0].push(&wave);
+            mixer.play(&mut out);
+        }
+        let energy = |ch: usize| out.iter().skip(ch).step_by(CHANNELS).map(|s| s * s).sum::<f32>();
+        assert!(energy(1) > energy(0) * 2.0, "{} {}", energy(0), energy(1));
+    }
+
+    #[test]
+    fn balance_comes_after_the_place() {
+        // the source is on the right, and the balance takes the right channel off the result
+        let [left, right] = placed(Some([1.0, 0.0, 0.0]), [1.0, 0.0]);
+        assert!(left > 0.0 && right == 0.0, "{left} {right}");
+    }
+
+    #[test]
+    fn a_gate_hears_the_sound_before_it_goes_to_its_place() {
+        let place = Some([1.0, 0.0, 0.0]);
+        let (mut mixer, links, levels) = mixer(&[Stage { place, ..stage("/g", "g", 0, [1.0; 2], -20.0) }], &[1]);
+        run(&mut mixer, &links, &[0.11], 20);
+        assert!((levels.take()["g"] - 0.11).abs() < 1e-6);
+        assert!(run(&mut mixer, &links, &[0.11], 1)[1] > 0.0);
+    }
+
+    #[test]
+    fn a_stage_leaves_its_place_when_told() {
+        let root = stage("", "", 0, [1.0; 2], NO_GATE);
+        let at = |place| Stage { place, ..stage("/g", "g", 0, [1.0; 2], NO_GATE) };
+        let (mut mixer, links, levels) = mixer(&[at(Some([1.0, 0.0, 0.0]))], &[1]);
+        run(&mut mixer, &links, &[0.25], 4);
+        mixer.set_stages(&[root, at(None)], &levels);
+        // one packet of fading, then the sound as it came
+        assert_eq!(run(&mut mixer, &links, &[0.25], 2), [0.25, 0.25]);
+        assert!(mixer.stages[1].spatial.is_none());
     }
 
     #[test]
